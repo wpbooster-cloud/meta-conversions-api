@@ -2,6 +2,12 @@
 
 All notable changes to Meta Conversions API will be documented in this file.
 
+## [1.0.3] - 2025-10-29
+
+### Fixed
+- **Fixed automatic updates not displaying** - Plugin now correctly detects folder name regardless of capitalization or spaces
+- Updater now uses `plugin_basename()` to dynamically detect actual plugin path
+
 ## [1.0.2] - 2025-10-29
 
 ### Added

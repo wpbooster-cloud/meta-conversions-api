@@ -28,7 +28,7 @@ class Meta_CAPI_Updater {
      */
     public function __construct() {
         $this->plugin_slug = 'meta-conversions-api';
-        $this->plugin_file = 'meta-conversions-api/meta-conversions-api.php';
+        $this->plugin_file = plugin_basename(META_CAPI_PLUGIN_FILE); // Use actual plugin file path
         $this->github_repo = 'wpbooster-cloud/meta-conversions-api';
         $this->version = META_CAPI_VERSION;
         $this->cache_key = 'meta_capi_update_info';
@@ -198,13 +198,27 @@ class Meta_CAPI_Updater {
         );
 
         if (is_wp_error($response)) {
+            // Log error for debugging
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Meta CAPI Update Check Error: ' . $response->get_error_message());
+            }
             return false;
         }
 
-        $release = json_decode(wp_remote_retrieve_body($response));
+        $body = wp_remote_retrieve_body($response);
+        $release = json_decode($body);
 
         if (empty($release) || isset($release->message)) {
+            // Log API response for debugging
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('Meta CAPI Update Check: Invalid GitHub response - ' . print_r($release, true));
+            }
             return false;
+        }
+        
+        // Debug log successful fetch
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Meta CAPI Update Check: Found version ' . $release->tag_name . ' (current: ' . $this->version . ')');
         }
 
         // Parse version from tag (remove 'v' prefix).

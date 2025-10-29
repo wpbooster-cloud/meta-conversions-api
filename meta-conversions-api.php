@@ -3,7 +3,7 @@
  * Plugin Name: Meta Conversions API
  * Plugin URI: https://wpbooster.cloud/meta-conversions-api
  * Description: Connects to Facebook Conversions API to track page views and Elementor Pro form submissions
- * Version: 1.0.2
+ * Version: 1.0.3
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: WP Booster
@@ -22,7 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants.
-define('META_CAPI_VERSION', '1.0.2');
+define('META_CAPI_VERSION', '1.0.3');
 define('META_CAPI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('META_CAPI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('META_CAPI_PLUGIN_FILE', __FILE__);
