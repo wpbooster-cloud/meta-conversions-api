@@ -2,6 +2,12 @@
 
 All notable changes to Meta Conversions API will be documented in this file.
 
+## [1.0.5] - 2025-10-29
+
+### Fixed
+- **Fixed plugin deactivation after automatic update** - Updater now correctly preserves folder name and reactivates plugin
+- Post-update folder handling now uses actual plugin directory name
+
 ## [1.0.4] - 2025-10-29
 
 ### Changed

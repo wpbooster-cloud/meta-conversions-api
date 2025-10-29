@@ -296,10 +296,15 @@ class Meta_CAPI_Updater {
             return $response;
         }
 
-        // Move files to correct directory.
-        $proper_destination = WP_PLUGIN_DIR . '/' . $this->plugin_slug;
-        $wp_filesystem->move($result['destination'], $proper_destination);
-        $result['destination'] = $proper_destination;
+        // Get the actual plugin folder name from plugin_file (e.g., "Meta Conversions API" from "Meta Conversions API/meta-conversions-api.php")
+        $plugin_folder = dirname($this->plugin_file);
+        $proper_destination = WP_PLUGIN_DIR . '/' . $plugin_folder;
+        
+        // Only move if destinations are different
+        if ($result['destination'] !== $proper_destination) {
+            $wp_filesystem->move($result['destination'], $proper_destination);
+            $result['destination'] = $proper_destination;
+        }
 
         // Reactivate the plugin.
         if ($hook_extra['action'] === 'update') {
