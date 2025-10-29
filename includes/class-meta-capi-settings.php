@@ -568,33 +568,52 @@ class Meta_CAPI_Settings {
         $result = $client->send_event($test_data);
 
         if ($result['success']) {
-            add_settings_error(
-                'meta_capi_settings',
-                'meta_capi_test_success',
-                __('Test event sent successfully! Check your Facebook Events Manager to verify.', 'meta-conversions-api'),
-                'success'
-            );
+            set_transient('meta_capi_test_result', [
+                'type' => 'success',
+                'message' => __('Test event sent successfully! Check your Facebook Events Manager to verify.', 'meta-conversions-api')
+            ], 30);
         } else {
-            add_settings_error(
-                'meta_capi_settings',
-                'meta_capi_test_error',
-                sprintf(
+            set_transient('meta_capi_test_result', [
+                'type' => 'error',
+                'message' => sprintf(
                     __('Failed to send test event: %s', 'meta-conversions-api'),
                     $result['message']
-                ),
-                'error'
-            );
+                )
+            ], 30);
         }
+        
+        // Redirect to avoid form resubmission
+        wp_redirect(add_query_arg('test_sent', '1', wp_get_referer()));
+        exit;
     }
 
     /**
      * Show admin notices for debug mode and test event code.
      */
     public function show_admin_notices(): void {
+        // DEBUG: Temporary - remove after testing
+        error_log('Meta CAPI: show_admin_notices() called');
+        error_log('Meta CAPI: Screen ID = ' . (get_current_screen() ? get_current_screen()->id : 'NULL'));
+        
         // Only show on plugin pages
         $screen = get_current_screen();
-        if (!$screen || strpos($screen->id, 'meta-c') === false) {
+        if (!$screen || strpos($screen->id, 'meta-conversions-api') === false) {
+            error_log('Meta CAPI: Admin notices skipped - screen check failed');
             return;
+        }
+        
+        error_log('Meta CAPI: Admin notices passed screen check!');
+
+        // Check for test connection result
+        $test_result = get_transient('meta_capi_test_result');
+        if ($test_result) {
+            delete_transient('meta_capi_test_result');
+            $notice_class = $test_result['type'] === 'success' ? 'notice-success' : 'notice-error';
+            ?>
+            <div class="notice <?php echo esc_attr($notice_class); ?> is-dismissible">
+                <p><?php echo esc_html($test_result['message']); ?></p>
+            </div>
+            <?php
         }
 
         // Warning for debug logging enabled
