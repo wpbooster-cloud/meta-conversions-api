@@ -351,22 +351,12 @@ class Meta_CAPI_Settings {
     public function render_analytics_section(): void {
         ?>
         <div id="analytics-settings"></div>
-        <p><?php esc_html_e('This plugin sends completely anonymous usage data weekly to help us improve. We collect no personal information.', 'meta-conversions-api'); ?></p>
-        <p><strong><?php esc_html_e('What we collect:', 'meta-conversions-api'); ?></strong></p>
-        <ul style="list-style: disc; margin-left: 20px;">
-            <li><?php esc_html_e('Anonymous site identifier (cannot be reversed)', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('Plugin version', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('WordPress and PHP versions', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('Which features are enabled', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('Whether Elementor Pro or WooCommerce are active', 'meta-conversions-api'); ?></li>
-        </ul>
-        <p><strong><?php esc_html_e('What we DO NOT collect:', 'meta-conversions-api'); ?></strong></p>
-        <ul style="list-style: disc; margin-left: 20px;">
-            <li><?php esc_html_e('Your domain name or URL', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('Any personal information', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('Any customer or user data', 'meta-conversions-api'); ?></li>
-            <li><?php esc_html_e('Facebook credentials or tracking data', 'meta-conversions-api'); ?></li>
-        </ul>
+        <p>
+            <?php esc_html_e('This plugin sends completely anonymous usage data weekly to help us improve.', 'meta-conversions-api'); ?>
+            <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=documentation#anonymous-analytics')); ?>">
+                <?php esc_html_e('Learn more about what data is collected', 'meta-conversions-api'); ?> →
+            </a>
+        </p>
         <?php
     }
 
@@ -719,6 +709,7 @@ class Meta_CAPI_Settings {
                     <li><a href="#quick-start"><?php esc_html_e('Quick Start Guide', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#what-tracked"><?php esc_html_e('What Gets Tracked', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#privacy"><?php esc_html_e('Privacy & Data Handling', 'meta-conversions-api'); ?></a></li>
+                    <li><a href="#anonymous-analytics"><?php esc_html_e('Anonymous Usage Analytics', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#plugin-updates"><?php esc_html_e('Plugin Updates', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#troubleshooting"><?php esc_html_e('Troubleshooting', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#useful-links"><?php esc_html_e('Useful Links', 'meta-conversions-api'); ?></a></li>
@@ -816,6 +807,57 @@ class Meta_CAPI_Settings {
                     <li><?php esc_html_e('User agent strings', 'meta-conversions-api'); ?></li>
                     <li><?php esc_html_e('Facebook browser cookies (_fbp, _fbc)', 'meta-conversions-api'); ?></li>
                 </ul>
+            </div>
+
+            <div class="card" id="anonymous-analytics" style="max-width: 100%; margin-top: 20px;">
+                <h2><?php esc_html_e('Anonymous Usage Analytics', 'meta-conversions-api'); ?></h2>
+                <p><?php esc_html_e('This plugin sends completely anonymous usage data weekly to help us improve. We collect no personal information whatsoever.', 'meta-conversions-api'); ?></p>
+                
+                <h3><?php esc_html_e('What We Collect:', 'meta-conversions-api'); ?></h3>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('Anonymous site identifier (hashed - cannot be reversed to reveal your domain)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Plugin version', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('WordPress version', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('PHP version', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Which tracking features are enabled (page views, forms)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Whether Elementor Pro is active (yes/no)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Whether WooCommerce is active (yes/no)', 'meta-conversions-api'); ?></li>
+                </ul>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('What We DO NOT Collect:', 'meta-conversions-api'); ?></h3>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('Your domain name or URL', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Any personal information', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Any customer or user data', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Your Facebook Dataset ID or Access Token', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Any tracking data sent to Facebook', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Page content, URLs, or visitor information', 'meta-conversions-api'); ?></li>
+                </ul>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('Why We Collect This:', 'meta-conversions-api'); ?></h3>
+                <p><?php esc_html_e('This anonymous data helps us:', 'meta-conversions-api'); ?></p>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('Understand which plugin versions are in use', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Prioritize features that users actually need', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Ensure compatibility with popular PHP and WordPress versions', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Make better decisions about future development', 'meta-conversions-api'); ?></li>
+                </ul>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('How to Opt-Out:', 'meta-conversions-api'); ?></h3>
+                <p>
+                    <?php esc_html_e('You can disable analytics collection at any time in', 'meta-conversions-api'); ?>
+                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#analytics-settings')); ?>">
+                        <?php esc_html_e('Settings', 'meta-conversions-api'); ?>
+                    </a>.
+                    <?php esc_html_e('Simply check the "Disable Anonymous Analytics" option.', 'meta-conversions-api'); ?>
+                </p>
+
+                <div style="background: #f0f0f1; padding: 15px; border-left: 4px solid #2271b1; margin-top: 20px;">
+                    <strong><?php esc_html_e('Privacy Commitment:', 'meta-conversions-api'); ?></strong>
+                    <p style="margin: 10px 0 0 0;">
+                        <?php esc_html_e('We take privacy seriously. The site identifier is a one-way hash (MD5) that cannot be reversed to reveal your domain. We literally cannot see who you are or what your website is.', 'meta-conversions-api'); ?>
+                    </p>
+                </div>
             </div>
 
             <div class="card" id="plugin-updates" style="max-width: 100%; margin-top: 20px;">

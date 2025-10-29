@@ -3,7 +3,7 @@
  * Plugin Name: Meta Conversions API
  * Plugin URI: https://wpbooster.cloud/meta-conversions-api
  * Description: Connects to Facebook Conversions API to track page views and Elementor Pro form submissions
- * Version: 1.0.5
+ * Version: 1.1.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: WP Booster
@@ -22,7 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants.
-define('META_CAPI_VERSION', '1.0.5');
+define('META_CAPI_VERSION', '1.1.0');
 define('META_CAPI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('META_CAPI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('META_CAPI_PLUGIN_FILE', __FILE__);
@@ -310,25 +310,75 @@ class Meta_CAPI {
             return;
         }
 
+        // Get active theme info
+        $theme = wp_get_theme();
+        $theme_name = $theme->get('Name');
+        
+        // Get database version
+        global $wpdb;
+        $mysql_version = $wpdb->db_version();
+        
+        // Get memory limit
+        $memory_limit = ini_get('memory_limit');
+        if (!$memory_limit) {
+            $memory_limit = WP_MEMORY_LIMIT;
+        }
+        
+        // Get Elementor Pro version
+        $elementor_pro_version = '';
+        if (did_action('elementor_pro/init') && defined('ELEMENTOR_PRO_VERSION')) {
+            $elementor_pro_version = ELEMENTOR_PRO_VERSION;
+        }
+        
+        // Get WooCommerce version
+        $woocommerce_version = '';
+        if (class_exists('WooCommerce') && defined('WC_VERSION')) {
+            $woocommerce_version = WC_VERSION;
+        }
+        
         // Collect anonymous data.
         $data = [
             'site_hash' => md5(get_option('siteurl')), // Anonymous identifier
             'plugin_version' => META_CAPI_VERSION,
             'wp_version' => get_bloginfo('version'),
             'php_version' => PHP_VERSION,
+            'mysql_version' => $mysql_version,
+            'memory_limit' => $memory_limit,
+            'locale' => get_locale(),
+            'is_multisite' => is_multisite() ? 1 : 0,
+            'is_ssl' => is_ssl() ? 1 : 0,
+            'active_theme' => $theme_name,
+            'total_plugins' => count((array) get_option('active_plugins', [])),
             'elementor_pro' => did_action('elementor_pro/init') ? 1 : 0,
+            'elementor_pro_version' => $elementor_pro_version,
             'woocommerce' => class_exists('WooCommerce') ? 1 : 0,
+            'woocommerce_version' => $woocommerce_version,
             'page_view_tracking' => get_option('meta_capi_enable_page_view', false) ? 1 : 0,
             'form_tracking' => get_option('meta_capi_enable_form_tracking', false) ? 1 : 0,
+            'debug_logging' => get_option('meta_capi_enable_logging', false) ? 1 : 0,
         ];
 
-        // Send to wpbooster.cloud (non-blocking, won't slow down the site).
-        wp_remote_post('https://wpbooster.cloud/wp-json/meta-capi/v1/stats', [
-            'blocking' => false,
+        // Send to wpbooster.cloud.
+        $this->logger->log('Sending anonymous stats to wpbooster.cloud...');
+        $this->logger->log('Stats data: ' . wp_json_encode($data));
+        
+        $response = wp_remote_post('https://wpbooster.cloud/wp-json/meta-capi/v1/stats', [
+            'blocking' => true, // Changed to blocking for debugging
             'timeout' => 5,
-            'headers' => ['Content-Type' => 'application/json'],
+            'headers' => [
+                'Content-Type' => 'application/json',
+                'User-Agent' => 'Meta-CAPI-Plugin/' . META_CAPI_VERSION . ' (WordPress/' . get_bloginfo('version') . ')',
+                'X-CAPI-Auth' => md5('wpbooster-meta-capi-2024'), // Secret auth token
+            ],
             'body' => wp_json_encode($data),
         ]);
+        
+        if (is_wp_error($response)) {
+            $this->logger->log('Stats send FAILED: ' . $response->get_error_message());
+        } else {
+            $this->logger->log('Stats send response code: ' . wp_remote_retrieve_response_code($response));
+            $this->logger->log('Stats send response body: ' . wp_remote_retrieve_body($response));
+        }
     }
 
     /**
