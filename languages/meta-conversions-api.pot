@@ -1,0 +1,28 @@
+# Copyright (C) 2025 WP Booster
+# This file is distributed under the GPL v2 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: Meta Conversions API 1.0.0\n"
+"Report-Msgid-Bugs-To: https://wpbooster.cloud\n"
+"POT-Creation-Date: 2025-10-29 00:00:00+00:00\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"PO-Revision-Date: 2025-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: en\n"
+
+#: meta-conversions-api.php:3
+msgid "Meta Conversions API"
+msgstr ""
+
+#: meta-conversions-api.php:5
+msgid "Connects to Facebook Conversions API to track page views and Elementor Pro form submissions"
+msgstr ""
+
+# Add more strings as needed - this is a template
+# To generate a complete .pot file, use:
+# wp i18n make-pot . languages/meta-conversions-api.pot
+# Or use Poedit or similar tool to scan all files
+

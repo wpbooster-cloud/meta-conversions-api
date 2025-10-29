@@ -1,0 +1,29 @@
+# WordPress
+.DS_Store
+thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Composer
+/vendor/
+composer.lock
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build files
+*.zip
+.cache/
+
+# Development files
+PROJECT-SUMMARY.md
+DEVELOPER-GUIDE.md
+QUICK-REFERENCE.md
+INSTALLATION.md

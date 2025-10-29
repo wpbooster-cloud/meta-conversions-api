@@ -1,0 +1,320 @@
+/**
+ * Admin styles for Meta Conversions API.
+ *
+ * @package Meta_Conversions_API
+ */
+
+.wrap h1 {
+    margin-bottom: 15px;
+}
+
+/* Tab navigation */
+.meta-capi-admin-wrap .nav-tab-wrapper {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ccd0d4;
+}
+
+.form-table th {
+    font-weight: 600;
+}
+
+.form-table td input[type="text"],
+.form-table td input[type="password"] {
+    width: 100%;
+    max-width: 500px;
+}
+
+.form-table .description {
+    color: #646970;
+    font-style: italic;
+    margin-top: 5px;
+}
+
+/* Settings sections */
+h2.title {
+    margin-top: 30px;
+    margin-bottom: 15px;
+    border-bottom: 2px solid #2271b1;
+    padding-bottom: 10px;
+}
+
+/* Notices */
+.notice {
+    margin: 20px 0;
+}
+
+/* Test connection section */
+hr {
+    margin: 40px 0 30px;
+    border: none;
+    border-top: 1px solid #dcdcde;
+}
+
+/* Success/Error indicators */
+.settings-error {
+    padding: 12px;
+}
+
+/* Admin page max-width for wide screens */
+.meta-capi-admin-wrap {
+    max-width: 1400px;
+}
+
+.meta-capi-admin-wrap .notice,
+.meta-capi-admin-wrap .settings-error,
+.meta-capi-admin-wrap .update-nag {
+    max-width: 100%;
+}
+
+/* Collapsible log viewer */
+.card details summary {
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s ease;
+}
+
+.card details summary:hover {
+    background: #e8eaed !important;
+}
+
+.card details[open] summary {
+    margin-bottom: 10px;
+}
+
+/* Two-column layout with sidebar */
+.wrap .meta-capi-admin-container,
+.meta-capi-admin-container {
+    display: -webkit-box !important;
+    display: -ms-flexbox !important;
+    display: flex !important;
+    -webkit-box-orient: horizontal !important;
+    -webkit-box-direction: normal !important;
+    -ms-flex-direction: row !important;
+    flex-direction: row !important;
+    -ms-flex-wrap: nowrap !important;
+    flex-wrap: nowrap !important;
+    gap: 20px !important;
+    margin-top: 20px !important;
+    -webkit-box-align: start !important;
+    -ms-flex-align: start !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.wrap .meta-capi-admin-main,
+.meta-capi-admin-main {
+    -webkit-box-flex: 1 !important;
+    -ms-flex: 1 1 0% !important;
+    flex: 1 1 0% !important;
+    min-width: 0 !important;
+    width: auto !important;
+    box-sizing: border-box !important;
+}
+
+.meta-capi-admin-main > * {
+    max-width: 100%;
+}
+
+.wrap .meta-capi-admin-sidebar,
+.meta-capi-admin-sidebar {
+    -webkit-box-flex: 0 !important;
+    -ms-flex: 0 0 300px !important;
+    flex: 0 0 300px !important;
+    width: 300px !important;
+    min-width: 300px !important;
+    max-width: 300px !important;
+    box-sizing: border-box !important;
+}
+
+/* Promotional Box */
+.meta-capi-promo-box {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    position: sticky;
+    top: 32px;
+    max-width: 300px;
+}
+
+.meta-capi-promo-logo {
+    text-align: center;
+    margin-bottom: 20px;
+    padding: 0 10px;
+}
+
+.meta-capi-promo-logo img {
+    max-width: 100%;
+    width: 220px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+}
+
+.meta-capi-promo-box h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    font-size: 16px;
+    color: #1d2327;
+    font-weight: 600;
+}
+
+.meta-capi-promo-box p {
+    margin: 12px 0;
+    font-size: 14px;
+    color: #50575e;
+    line-height: 1.6;
+}
+
+.meta-capi-promo-list {
+    list-style: none;
+    margin: 16px 0;
+    padding: 0;
+}
+
+.meta-capi-promo-list li {
+    padding: 6px 0;
+    font-size: 14px;
+    color: #50575e;
+    line-height: 1.5;
+}
+
+.meta-capi-promo-tagline {
+    background: #f0f6fc;
+    border-left: 3px solid #2271b1;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 14px;
+}
+
+.meta-capi-promo-tagline strong {
+    color: #1d2327;
+}
+
+
+.meta-capi-promo-button {
+    width: 100%;
+    text-align: center;
+    margin: 16px 0 12px;
+    font-size: 14px !important;
+    padding: 8px 16px !important;
+    height: auto !important;
+}
+
+.meta-capi-promo-divider {
+    height: 1px;
+    background: #dcdcde;
+    margin: 20px 0;
+}
+
+.meta-capi-hosting-box {
+    background: #f9f9f9;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+}
+
+.meta-capi-hosting-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #1d2327;
+}
+
+.meta-capi-hosting-text {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: #50575e;
+}
+
+.meta-capi-hosting-button {
+    width: 100%;
+    text-align: center;
+    font-size: 13px !important;
+    padding: 6px 12px !important;
+    height: auto !important;
+}
+
+.meta-capi-promo-footer {
+    text-align: center;
+    margin: 12px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid #f0f0f1;
+}
+
+.meta-capi-promo-footer small {
+    color: #8c8f94;
+    font-size: 12px;
+}
+
+.meta-capi-promo-footer a {
+    color: #2271b1;
+    text-decoration: none;
+}
+
+.meta-capi-promo-footer a:hover {
+    color: #135e96;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 1280px) {
+    .meta-capi-admin-sidebar {
+        flex: 0 0 280px !important;
+        width: 280px !important;
+        min-width: 280px !important;
+        max-width: 280px !important;
+    }
+    
+    .meta-capi-promo-box {
+        max-width: 280px;
+    }
+    
+    .meta-capi-promo-logo img {
+        width: 180px;
+    }
+}
+
+@media screen and (max-width: 960px) {
+    .meta-capi-admin-container {
+        flex-direction: column !important;
+    }
+    
+    .meta-capi-admin-main {
+        max-width: 100% !important;
+    }
+    
+    .meta-capi-admin-sidebar {
+        flex: 1 1 auto !important;
+        width: 100% !important;
+        max-width: 500px !important;
+        min-width: 0 !important;
+        margin: 0 auto;
+    }
+    
+    .meta-capi-promo-box {
+        position: static;
+        max-width: 100%;
+    }
+    
+    .meta-capi-promo-logo img {
+        width: 200px;
+    }
+}
+
+@media screen and (max-width: 782px) {
+    .form-table td input[type="text"],
+    .form-table td input[type="password"] {
+        max-width: 100%;
+    }
+    
+    .meta-capi-promo-box {
+        padding: 16px;
+    }
+    
+    .meta-capi-promo-logo img {
+        width: 160px;
+    }
+}
+
