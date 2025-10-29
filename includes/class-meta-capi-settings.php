@@ -81,6 +81,12 @@ class Meta_CAPI_Settings {
             'default' => false,
         ]);
 
+        register_setting('meta_capi_settings', 'meta_capi_disable_stats', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => false,
+        ]);
+
         // Add settings sections.
         add_settings_section(
             'meta_capi_credentials',
@@ -100,6 +106,13 @@ class Meta_CAPI_Settings {
             'meta_capi_advanced',
             __('Testing', 'meta-conversions-api'),
             [$this, 'render_advanced_section'],
+            'meta-conversions-api'
+        );
+
+        add_settings_section(
+            'meta_capi_analytics',
+            __('Anonymous Usage Analytics', 'meta-conversions-api'),
+            [$this, 'render_analytics_section'],
             'meta-conversions-api'
         );
 
@@ -160,6 +173,14 @@ class Meta_CAPI_Settings {
         //     'meta-conversions-api',
         //     'meta_capi_advanced'
         // );
+
+        add_settings_field(
+            'meta_capi_disable_stats',
+            __('Disable Anonymous Analytics', 'meta-conversions-api'),
+            [$this, 'render_analytics_opt_out_field'],
+            'meta-conversions-api',
+            'meta_capi_analytics'
+        );
     }
 
     /**
@@ -325,6 +346,31 @@ class Meta_CAPI_Settings {
     }
 
     /**
+     * Render analytics settings section description.
+     */
+    public function render_analytics_section(): void {
+        ?>
+        <div id="analytics-settings"></div>
+        <p><?php esc_html_e('This plugin sends completely anonymous usage data weekly to help us improve. We collect no personal information.', 'meta-conversions-api'); ?></p>
+        <p><strong><?php esc_html_e('What we collect:', 'meta-conversions-api'); ?></strong></p>
+        <ul style="list-style: disc; margin-left: 20px;">
+            <li><?php esc_html_e('Anonymous site identifier (cannot be reversed)', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('Plugin version', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('WordPress and PHP versions', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('Which features are enabled', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('Whether Elementor Pro or WooCommerce are active', 'meta-conversions-api'); ?></li>
+        </ul>
+        <p><strong><?php esc_html_e('What we DO NOT collect:', 'meta-conversions-api'); ?></strong></p>
+        <ul style="list-style: disc; margin-left: 20px;">
+            <li><?php esc_html_e('Your domain name or URL', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('Any personal information', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('Any customer or user data', 'meta-conversions-api'); ?></li>
+            <li><?php esc_html_e('Facebook credentials or tracking data', 'meta-conversions-api'); ?></li>
+        </ul>
+        <?php
+    }
+
+    /**
      * Render Dataset ID field.
      */
     public function render_pixel_id_field(): void {
@@ -464,6 +510,28 @@ class Meta_CAPI_Settings {
         </label>
         <p class="description">
             <?php esc_html_e('Track WooCommerce purchases, add to cart, and checkout events. This feature will be available in a future update.', 'meta-conversions-api'); ?>
+        </p>
+        <?php
+    }
+
+    /**
+     * Render analytics opt-out field.
+     */
+    public function render_analytics_opt_out_field(): void {
+        $value = get_option('meta_capi_disable_stats', false);
+        ?>
+        <label>
+            <input
+                type="checkbox"
+                name="meta_capi_disable_stats"
+                id="meta_capi_disable_stats"
+                value="1"
+                <?php checked($value, true); ?>
+            >
+            <?php esc_html_e('Disable anonymous usage analytics', 'meta-conversions-api'); ?>
+        </label>
+        <p class="description">
+            <?php esc_html_e('Check this box to opt-out of sending anonymous usage data. This helps us improve the plugin, but is completely optional.', 'meta-conversions-api'); ?>
         </p>
         <?php
     }
@@ -651,6 +719,7 @@ class Meta_CAPI_Settings {
                     <li><a href="#quick-start"><?php esc_html_e('Quick Start Guide', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#what-tracked"><?php esc_html_e('What Gets Tracked', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#privacy"><?php esc_html_e('Privacy & Data Handling', 'meta-conversions-api'); ?></a></li>
+                    <li><a href="#plugin-updates"><?php esc_html_e('Plugin Updates', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#troubleshooting"><?php esc_html_e('Troubleshooting', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#useful-links"><?php esc_html_e('Useful Links', 'meta-conversions-api'); ?></a></li>
                 </ul>
@@ -749,6 +818,45 @@ class Meta_CAPI_Settings {
                 </ul>
             </div>
 
+            <div class="card" id="plugin-updates" style="max-width: 100%; margin-top: 20px;">
+                <h2><?php esc_html_e('Plugin Updates', 'meta-conversions-api'); ?></h2>
+                <p><?php esc_html_e('This plugin automatically checks for updates from GitHub once per week.', 'meta-conversions-api'); ?></p>
+                
+                <h3><?php esc_html_e('Automatic Updates', 'meta-conversions-api'); ?></h3>
+                <p><?php esc_html_e('When a new version is available:', 'meta-conversions-api'); ?></p>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('You\'ll see an update notification on the Plugins page', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Click "Update Now" to install the latest version', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('The update installs automatically - no manual download needed', 'meta-conversions-api'); ?></li>
+                </ul>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('Manual Update Check', 'meta-conversions-api'); ?></h3>
+                <p><?php esc_html_e('Don\'t want to wait for the weekly check? Force an immediate update check:', 'meta-conversions-api'); ?></p>
+                
+                <p><strong><?php esc_html_e('Option 1: Use the Tools Page', 'meta-conversions-api'); ?></strong></p>
+                <p>
+                    <?php esc_html_e('Go to', 'meta-conversions-api'); ?> 
+                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools')); ?>"><?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?></a> 
+                    <?php esc_html_e('and click "Check for Updates Now"', 'meta-conversions-api'); ?>
+                </p>
+
+                <p style="margin-top: 15px;"><strong><?php esc_html_e('Option 2: Use This Quick Link', 'meta-conversions-api'); ?></strong></p>
+                <p><?php esc_html_e('Bookmark or copy this URL to force an update check anytime:', 'meta-conversions-api'); ?></p>
+                <div style="background: #f0f0f1; padding: 12px; border-radius: 4px; margin: 10px 0; font-family: monospace; word-break: break-all;">
+                    <?php echo esc_url(admin_url('?meta_capi_check_updates=1')); ?>
+                </div>
+                <p class="description">
+                    <?php esc_html_e('Click to test:', 'meta-conversions-api'); ?> 
+                    <a href="<?php echo esc_url(admin_url('?meta_capi_check_updates=1')); ?>" target="_blank"><?php esc_html_e('Force Update Check Now', 'meta-conversions-api'); ?></a>
+                </p>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('Latest Releases', 'meta-conversions-api'); ?></h3>
+                <p>
+                    <?php esc_html_e('View changelog and download releases:', 'meta-conversions-api'); ?> 
+                    <a href="https://github.com/wpbooster-cloud/meta-conversions-api/releases" target="_blank"><?php esc_html_e('GitHub Releases', 'meta-conversions-api'); ?></a>
+                </p>
+            </div>
+
             <div class="card" id="troubleshooting" style="max-width: 100%; margin-top: 20px;">
                 <h2><?php esc_html_e('Troubleshooting', 'meta-conversions-api'); ?></h2>
                 
@@ -828,6 +936,17 @@ class Meta_CAPI_Settings {
             settings_errors('meta_capi_tools');
         }
 
+        // Show update check success message
+        if (isset($_GET['update_checked']) && $_GET['update_checked'] === '1') {
+            add_settings_error(
+                'meta_capi_tools',
+                'update_checked',
+                __('Update check completed! If an update is available, you\'ll see it on the Plugins page.', 'meta-conversions-api'),
+                'success'
+            );
+            settings_errors('meta_capi_tools');
+        }
+
         // Handle download log
         if (isset($_GET['download_log']) && check_admin_referer('meta_capi_download_log', '_wpnonce')) {
             $this->download_log();
@@ -873,6 +992,36 @@ class Meta_CAPI_Settings {
                         </button>
                     <?php endif; ?>
                 </form>
+            </div>
+
+            <!-- Update Check -->
+            <div class="card" style="max-width: 100%; margin-top: 20px;">
+                <h2><?php esc_html_e('Plugin Updates', 'meta-conversions-api'); ?></h2>
+                <p>
+                    <?php esc_html_e('Current version:', 'meta-conversions-api'); ?>
+                    <strong><?php echo esc_html(META_CAPI_VERSION); ?></strong>
+                </p>
+                <p class="description">
+                    <?php esc_html_e('The plugin automatically checks for updates weekly. Use the button below to force an immediate update check.', 'meta-conversions-api'); ?>
+                </p>
+                <form method="post" style="margin-top: 15px;">
+                    <?php wp_nonce_field('meta_capi_force_update', 'meta_capi_update_nonce'); ?>
+                    <input type="hidden" name="meta_capi_force_update_check" value="1">
+                    <button type="submit" class="button button-secondary">
+                        <span class="dashicons dashicons-update" style="margin-top: 3px;"></span>
+                        <?php esc_html_e('Check for Updates Now', 'meta-conversions-api'); ?>
+                    </button>
+                </form>
+                <p class="description" style="margin-top: 15px;">
+                    <?php 
+                    echo wp_kses_post(
+                        sprintf(
+                            __('Or use this quick link: <a href="%s">Force Update Check</a>', 'meta-conversions-api'),
+                            esc_url(admin_url('?meta_capi_check_updates=1'))
+                        )
+                    );
+                    ?>
+                </p>
             </div>
 
             <!-- System Status -->

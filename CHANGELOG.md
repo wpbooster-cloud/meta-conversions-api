@@ -2,6 +2,31 @@
 
 All notable changes to Meta Conversions API will be documented in this file.
 
+## [1.0.2] - 2025-10-29
+
+### Added
+- **Automatic updates from GitHub releases**
+  - Plugin checks for updates weekly
+  - One-click updates directly from WordPress admin
+  - Manual "Check for Updates Now" button in Tools & Logs
+  - No manual download required
+- **Anonymous usage analytics** (opt-out available)
+  - Transparent privacy notice on activation
+  - Opt-out checkbox in Settings
+  - Detailed explanation of data collected
+  - Weekly check-in to wpbooster.cloud
+  - Completely anonymous - only site hash, versions, and feature usage
+- **Admin email notifications for API failures**
+  - Automatic alerts after 5+ API failures within 1 hour
+  - Maximum one notification per 24 hours
+  - Includes error details and settings link
+
+### Improved
+- Enhanced documentation with GitHub release links and update instructions
+- Better installation instructions
+- Added Plugin Updates section to Documentation tab
+- Added anchor links throughout documentation for easy navigation
+
 ## [1.0.0] - 2025-10-29
 
 ### Added

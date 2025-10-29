@@ -3,7 +3,7 @@
  * Plugin Name: Meta Conversions API
  * Plugin URI: https://wpbooster.cloud/meta-conversions-api
  * Description: Connects to Facebook Conversions API to track page views and Elementor Pro form submissions
- * Version: 1.0.0
+ * Version: 1.0.2
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: WP Booster
@@ -22,7 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants.
-define('META_CAPI_VERSION', '1.0.0');
+define('META_CAPI_VERSION', '1.0.2');
 define('META_CAPI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('META_CAPI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('META_CAPI_PLUGIN_FILE', __FILE__);
@@ -38,6 +38,7 @@ require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-client.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-tracking.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-elementor.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-logger.php';
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-updater.php';
 
 /**
  * Main plugin class.
@@ -116,6 +117,9 @@ class Meta_CAPI {
 
         // Initialize API client.
         $this->client = new Meta_CAPI_Client($this->logger);
+        
+        // Initialize automatic updates.
+        new Meta_CAPI_Updater();
 
         // Initialize tracking.
         $this->tracking = new Meta_CAPI_Tracking($this->client, $this->logger);
@@ -137,6 +141,9 @@ class Meta_CAPI {
         // Weekly anonymous stats (opt-out available).
         add_action('meta_capi_send_stats', [$this, 'send_anonymous_stats']);
 
+        // Manual stats trigger via secret URL parameter (for testing).
+        add_action('admin_init', [$this, 'maybe_send_stats_manually']);
+
         // Activation/Deactivation hooks.
         register_activation_hook(META_CAPI_PLUGIN_FILE, [$this, 'activate']);
         register_deactivation_hook(META_CAPI_PLUGIN_FILE, [$this, 'deactivate']);
@@ -157,6 +164,26 @@ class Meta_CAPI {
      * Display admin notices.
      */
     public function admin_notices(): void {
+        // Show analytics notice on first activation.
+        if (get_transient('meta_capi_show_analytics_notice')) {
+            ?>
+            <div class="notice notice-info is-dismissible">
+                <p>
+                    <strong><?php esc_html_e('Meta Conversions API: Anonymous Usage Analytics', 'meta-conversions-api'); ?></strong><br>
+                    <?php 
+                    echo wp_kses_post(
+                        sprintf(
+                            __('This plugin sends completely anonymous usage data weekly to help us improve. No personal data is collected. <a href="%s">Learn more or opt-out in Settings</a>.', 'meta-conversions-api'),
+                            esc_url(admin_url('options-general.php?page=meta-conversions-api#analytics-settings'))
+                        )
+                    );
+                    ?>
+                </p>
+            </div>
+            <?php
+            delete_transient('meta_capi_show_analytics_notice');
+        }
+        
         // Check if credentials are configured.
         $pixel_id = get_option('meta_capi_pixel_id');
         $access_token = get_option('meta_capi_access_token');
@@ -201,6 +228,12 @@ class Meta_CAPI {
         add_option('meta_capi_enable_page_view', '1');
         add_option('meta_capi_enable_form_tracking', '1');
         add_option('meta_capi_enable_logging', '0');
+        
+        // Analytics opt-in by default (can be disabled in settings).
+        add_option('meta_capi_disable_stats', '0');
+        
+        // Set flag to show analytics notice.
+        set_transient('meta_capi_show_analytics_notice', true, DAY_IN_SECONDS);
 
         // Schedule daily log cleanup.
         if (!wp_next_scheduled('meta_capi_cleanup_logs')) {
@@ -241,6 +274,29 @@ class Meta_CAPI {
      */
     public function cleanup_old_logs(): void {
         $this->logger->clear_old_logs(30); // Keep logs for 30 days.
+    }
+
+    /**
+     * Check for secret URL parameter to manually trigger stats (for testing).
+     */
+    public function maybe_send_stats_manually(): void {
+        // Secret parameter: ?meta_capi_ping_stats=wpbooster2024
+        if (isset($_GET['meta_capi_ping_stats']) && 
+            sanitize_text_field(wp_unslash($_GET['meta_capi_ping_stats'])) === 'wpbooster2024' &&
+            current_user_can('manage_options')) {
+            
+            $this->send_anonymous_stats();
+            
+            wp_die(
+                '<h1>✅ Analytics Ping Sent!</h1>' .
+                '<p>Anonymous statistics have been sent to wpbooster.cloud</p>' .
+                '<p><strong>Site Hash:</strong> ' . esc_html(md5(get_option('siteurl'))) . '</p>' .
+                '<p><strong>Plugin Version:</strong> ' . esc_html(META_CAPI_VERSION) . '</p>' .
+                '<p><a href="' . esc_url(admin_url('options-general.php?page=meta-conversions-api')) . '">← Back to Settings</a></p>',
+                'Analytics Ping Sent',
+                ['response' => 200]
+            );
+        }
     }
 
     /**

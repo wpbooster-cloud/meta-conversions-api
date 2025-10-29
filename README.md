@@ -22,11 +22,19 @@ A comprehensive WordPress plugin that integrates with Facebook (Meta) Conversion
 
 ## Installation
 
-1. Upload the plugin files to the `/wp-content/plugins/meta-conversions-api` directory
-2. Activate the plugin through the 'Plugins' menu in WordPress
-3. Go to Settings → Meta CAPI
-4. Enter your Facebook Dataset ID and Access Token
-5. Configure tracking settings
+1. Download the latest release from [GitHub Releases](https://github.com/wpbooster-cloud/meta-conversions-api/releases)
+2. Upload the ZIP file via WordPress Admin → Plugins → Add New → Upload Plugin
+3. Activate the plugin through the 'Plugins' menu in WordPress
+4. Go to Settings → Meta CAPI
+5. Enter your Facebook Dataset ID and Access Token
+6. Configure tracking settings
+
+### Automatic Updates
+
+The plugin automatically checks for updates from GitHub weekly. When a new version is available:
+- You'll see an update notification in your WordPress admin dashboard
+- Click "Update" to install the latest version automatically
+- No manual download required!
 
 ## Configuration
 
