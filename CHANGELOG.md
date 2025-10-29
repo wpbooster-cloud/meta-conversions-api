@@ -2,6 +2,11 @@
 
 All notable changes to Meta Conversions API will be documented in this file.
 
+## [1.0.4] - 2025-10-29
+
+### Changed
+- Minor improvements and testing automatic update functionality
+
 ## [1.0.3] - 2025-10-29
 
 ### Fixed
