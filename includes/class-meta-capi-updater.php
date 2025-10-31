@@ -235,7 +235,7 @@ class Meta_CAPI_Updater {
 
         // Build release info object.
         $release_info = (object) [
-            'name' => 'Meta Conversions API',
+            'name' => 'Meta Pixel & Conversions API',
             'version' => $version,
             'homepage' => "https://github.com/{$this->github_repo}",
             'download_url' => $download_url,
@@ -243,7 +243,7 @@ class Meta_CAPI_Updater {
             'tested' => '6.7',
             'requires_php' => '8.0',
             'last_updated' => $release->published_at,
-            'description' => 'WordPress plugin for Facebook Conversions API tracking with Elementor Pro integration.',
+            'description' => 'Complete Meta tracking solution with Pixel (browser-side) and Conversions API (server-side). Supports page views, Elementor Pro forms, and WooCommerce events with automatic deduplication.',
             'changelog' => $this->parse_changelog($release->body),
         ];
 

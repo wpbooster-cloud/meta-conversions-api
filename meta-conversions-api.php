@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Meta Conversions API
- * Plugin URI: https://wpbooster.cloud/meta-conversions-api
- * Description: Connects to Facebook Conversions API to track page views and Elementor Pro form submissions
- * Version: 1.1.1
+ * Plugin Name: Meta Pixel & Conversions API
+ * Plugin URI: https://wpbooster.cloud/meta-pixel-conversions-api
+ * Description: Complete Meta tracking solution with Pixel (browser) and Conversions API (server). Supports page views, Elementor Pro forms, and WooCommerce events with automatic deduplication.
+ * Version: 2.0.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: WP Booster
@@ -22,7 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants.
-define('META_CAPI_VERSION', '1.1.1');
+define('META_CAPI_VERSION', '2.0.0');
 define('META_CAPI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('META_CAPI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('META_CAPI_PLUGIN_FILE', __FILE__);
@@ -33,12 +33,21 @@ if (file_exists(META_CAPI_PLUGIN_DIR . 'vendor/autoload.php')) {
 }
 
 // Include core classes.
-require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-settings.php';
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-logger.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-client.php';
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-settings.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-tracking.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-elementor.php';
-require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-logger.php';
 require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-updater.php';
+
+// Include Phase 1 classes (WooCommerce Integration).
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-woocommerce.php';
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-pixel.php';
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-coordinator.php';
+
+// Include Phase 1.5 classes (Performance & Diagnostics).
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-system-status.php';
+require_once META_CAPI_PLUGIN_DIR . 'includes/class-meta-capi-scripts.php';
 
 /**
  * Main plugin class.
@@ -87,6 +96,41 @@ class Meta_CAPI {
     public $logger;
 
     /**
+     * WooCommerce integration instance.
+     *
+     * @var Meta_CAPI_WooCommerce|null
+     */
+    public $woocommerce = null;
+
+    /**
+     * Meta Pixel management instance.
+     *
+     * @var Meta_CAPI_Pixel
+     */
+    public $pixel;
+
+    /**
+     * Event coordinator instance.
+     *
+     * @var Meta_CAPI_Coordinator
+     */
+    public $coordinator;
+
+    /**
+     * System status instance.
+     *
+     * @var Meta_CAPI_System_Status
+     */
+    public $system_status;
+
+    /**
+     * Scripts manager instance.
+     *
+     * @var Meta_CAPI_Scripts
+     */
+    public $scripts;
+
+    /**
      * Get the singleton instance.
      *
      * @return Meta_CAPI
@@ -109,7 +153,7 @@ class Meta_CAPI {
      * Initialize the plugin.
      */
     private function init(): void {
-        // Initialize logger first.
+        // Initialize logger first (needed by all other classes).
         $this->logger = new Meta_CAPI_Logger();
 
         // Initialize settings.
@@ -121,11 +165,24 @@ class Meta_CAPI {
         // Initialize automatic updates.
         new Meta_CAPI_Updater();
 
-        // Initialize tracking.
+        // Initialize tracking (page views, etc.).
         $this->tracking = new Meta_CAPI_Tracking($this->client, $this->logger);
 
         // Initialize Elementor integration.
         $this->elementor = new Meta_CAPI_Elementor($this->client, $this->logger);
+
+        // Initialize Phase 1 classes (Pixel & Coordinator).
+        $this->coordinator = new Meta_CAPI_Coordinator($this->logger);
+        $this->pixel = new Meta_CAPI_Pixel($this->logger);
+
+        // Initialize Phase 1.5 classes (Performance & Diagnostics).
+        $this->system_status = new Meta_CAPI_System_Status($this->logger);
+        $this->scripts = new Meta_CAPI_Scripts($this->logger);
+
+        // Initialize WooCommerce integration after all plugins have loaded.
+        add_action('plugins_loaded', [$this, 'init_woocommerce']);
+
+        $this->logger->log('Meta Conversions API v' . META_CAPI_VERSION . ' initialized');
 
         // Register hooks.
         add_action('init', [$this, 'load_textdomain']);
@@ -150,6 +207,18 @@ class Meta_CAPI {
     }
 
     /**
+     * Initialize WooCommerce integration after all plugins have loaded.
+     * This ensures WooCommerce class exists before we check for it.
+     */
+    public function init_woocommerce(): void {
+        // Only initialize if WooCommerce is active and tracking is enabled.
+        if (class_exists('WooCommerce') && get_option('meta_capi_enable_woocommerce', false)) {
+            $this->woocommerce = new Meta_CAPI_WooCommerce($this->client, $this->logger);
+            $this->logger->log('WooCommerce integration initialized', 'info');
+        }
+    }
+
+    /**
      * Load plugin textdomain.
      */
     public function load_textdomain(): void {
@@ -164,6 +233,12 @@ class Meta_CAPI {
      * Display admin notices.
      */
     public function admin_notices(): void {
+        // Only show notices on admin pages.
+        $screen = get_current_screen();
+        if (!$screen) {
+            return;
+        }
+
         // Show analytics notice on first activation.
         if (get_transient('meta_capi_show_analytics_notice')) {
             ?>
@@ -192,10 +267,11 @@ class Meta_CAPI {
             ?>
             <div class="notice notice-warning is-dismissible">
                 <p>
+                    <strong><?php esc_html_e('Meta Conversions API - Setup Required', 'meta-conversions-api'); ?></strong><br>
                     <?php
                     echo wp_kses_post(
                         sprintf(
-                            __('Meta Conversions API: Please <a href="%s">configure your settings</a> to start tracking events.', 'meta-conversions-api'),
+                            __('Please <a href="%s">configure your settings</a> to start tracking events.', 'meta-conversions-api'),
                             esc_url(admin_url('options-general.php?page=meta-conversions-api'))
                         )
                     );
@@ -203,17 +279,32 @@ class Meta_CAPI {
                 </p>
             </div>
             <?php
+            return; // Don't show other notices if not configured.
         }
 
-        // Check if Elementor Pro is active.
-        if (!did_action('elementor_pro/init')) {
-            ?>
-            <div class="notice notice-info">
-                <p>
-                    <?php esc_html_e('Meta Conversions API: Elementor Pro is not active. Form submission tracking will not be available.', 'meta-conversions-api'); ?>
-                </p>
-            </div>
-            <?php
+        // Show system status warnings (only on plugin pages).
+        if (strpos($screen->id, 'meta-conversions-api') !== false || $screen->id === 'plugins') {
+            $status = $this->system_status->get_status();
+            
+            if (!empty($status['warnings'])) {
+                foreach ($status['warnings'] as $warning) {
+                    $notice_class = 'notice-' . ($warning['level'] === 'error' ? 'error' : 'warning');
+                    ?>
+                    <div class="notice <?php echo esc_attr($notice_class); ?> is-dismissible">
+                        <p>
+                            <strong><?php echo esc_html($warning['title']); ?></strong><br>
+                            <?php echo esc_html($warning['message']); ?>
+                            <?php if (!empty($warning['action_text'])): ?>
+                                <br>
+                                <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools')); ?>" class="button button-small">
+                                    <?php echo esc_html($warning['action_text']); ?>
+                                </a>
+                            <?php endif; ?>
+                        </p>
+                    </div>
+                    <?php
+                }
+            }
         }
     }
 
@@ -225,6 +316,7 @@ class Meta_CAPI {
         add_option('meta_capi_pixel_id', '');
         add_option('meta_capi_access_token', '');
         add_option('meta_capi_test_event_code', '');
+        add_option('meta_capi_enable_pixel', '1');
         add_option('meta_capi_enable_page_view', '1');
         add_option('meta_capi_enable_form_tracking', '1');
         add_option('meta_capi_enable_logging', '0');

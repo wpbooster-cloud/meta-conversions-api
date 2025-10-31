@@ -55,6 +55,12 @@ class Meta_CAPI_Tracking {
             return;
         }
 
+        // Skip tracking favicon, robots.txt, and other non-page requests.
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        if (preg_match('/\/(favicon\.ico|robots\.txt|sitemap.*\.xml|wp-admin|wp-includes|wp-json|crossdomain\.xml|apple-touch-icon.*\.png)/i', $request_uri)) {
+            return;
+        }
+
         // Don't track if user is logged in and is an admin (optional).
         if (current_user_can('manage_options') && apply_filters('meta_capi_skip_admin_tracking', true)) {
             return;

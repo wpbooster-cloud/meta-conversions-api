@@ -23,7 +23,67 @@ class Meta_CAPI_Settings {
         add_action('admin_menu', [$this, 'add_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
-        add_action('admin_notices', [$this, 'show_admin_notices']);
+        
+        // Initialize WooCommerce event defaults when WooCommerce tracking is enabled.
+        add_action('update_option_meta_capi_enable_woocommerce', [$this, 'maybe_initialize_wc_defaults'], 10, 2);
+        add_action('add_option_meta_capi_enable_woocommerce', [$this, 'initialize_wc_defaults_on_add'], 10, 2);
+    }
+
+    /**
+     * Sanitize WooCommerce enable option and initialize defaults if needed.
+     *
+     * @param mixed $value The submitted value.
+     * @return bool The sanitized boolean value.
+     */
+    public function sanitize_woocommerce_enable($value): bool {
+        $sanitized = rest_sanitize_boolean($value);
+        $old_value = get_option('meta_capi_enable_woocommerce', false);
+        
+        // If being enabled (was false, now true), initialize defaults.
+        if (!$old_value && $sanitized) {
+            // Check if events have been initialized before.
+            $initialized = get_option('meta_capi_wc_events_initialized', false);
+            
+            if (!$initialized) {
+                // Set defaults for event checkboxes (they'll be saved with the form).
+                $_POST['meta_capi_wc_enable_viewcontent'] = '1';
+                $_POST['meta_capi_wc_enable_addtocart'] = '1';
+                $_POST['meta_capi_wc_enable_initiatecheckout'] = '1';
+                $_POST['meta_capi_wc_enable_purchase'] = '1';
+                
+                // Set purchase timing default.
+                if (empty($_POST['meta_capi_wc_purchase_timing'])) {
+                    $_POST['meta_capi_wc_purchase_timing'] = 'placed';
+                }
+                
+                // Mark as initialized.
+                update_option('meta_capi_wc_events_initialized', '1');
+            }
+        }
+        
+        return $sanitized;
+    }
+    
+    /**
+     * Initialize WooCommerce event defaults when tracking is first enabled (via update).
+     *
+     * @param mixed $old_value Previous value.
+     * @param mixed $new_value New value.
+     */
+    public function maybe_initialize_wc_defaults($old_value, $new_value): void {
+        // This is now handled in sanitize callback.
+        // Kept for backwards compatibility if needed.
+    }
+    
+    /**
+     * Initialize WooCommerce event defaults when option is first created (via add).
+     *
+     * @param string $option Option name.
+     * @param mixed $value Option value.
+     */
+    public function initialize_wc_defaults_on_add($option, $value): void {
+        // This is now handled in sanitize callback.
+        // Kept for backwards compatibility if needed.
     }
 
     /**
@@ -63,6 +123,12 @@ class Meta_CAPI_Settings {
             'default' => '',
         ]);
 
+        register_setting('meta_capi_settings', 'meta_capi_enable_pixel', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true,
+        ]);
+
         register_setting('meta_capi_settings', 'meta_capi_enable_page_view', [
             'type' => 'boolean',
             'sanitize_callback' => 'rest_sanitize_boolean',
@@ -75,11 +141,58 @@ class Meta_CAPI_Settings {
             'default' => true,
         ]);
 
-        register_setting('meta_capi_settings', 'meta_capi_enable_logging', [
+        register_setting('meta_capi_settings', 'meta_capi_enable_woocommerce', [
+            'type' => 'boolean',
+            'sanitize_callback' => [$this, 'sanitize_woocommerce_enable'],
+            'default' => false,
+        ]);
+
+        // WooCommerce event tracking settings.
+        register_setting('meta_capi_settings', 'meta_capi_wc_purchase_timing', [
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_text_field',
+            'default' => 'placed',
+        ]);
+
+        register_setting('meta_capi_settings', 'meta_capi_wc_enable_viewcontent', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true,
+        ]);
+
+        register_setting('meta_capi_settings', 'meta_capi_wc_enable_addtocart', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true,
+        ]);
+
+        register_setting('meta_capi_settings', 'meta_capi_wc_enable_initiatecheckout', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true,
+        ]);
+
+        register_setting('meta_capi_settings', 'meta_capi_wc_enable_purchase', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true,
+        ]);
+        
+        // WooCommerce initialization flag (internal, not displayed).
+        register_setting('meta_capi_settings', 'meta_capi_wc_events_initialized', [
             'type' => 'boolean',
             'sanitize_callback' => 'rest_sanitize_boolean',
             'default' => false,
         ]);
+
+        // Pixel settings.
+        register_setting('meta_capi_settings', 'meta_capi_disable_auto_config', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true, // Default to true (disable Facebook's auto-config)
+        ]);
+
+        // Note: meta_capi_enable_logging is handled separately on Tools page via toggle form
 
         register_setting('meta_capi_settings', 'meta_capi_disable_stats', [
             'type' => 'boolean',
@@ -119,7 +232,7 @@ class Meta_CAPI_Settings {
         // Add settings fields.
         add_settings_field(
             'meta_capi_pixel_id',
-            __('Dataset ID', 'meta-conversions-api'),
+            __('Dataset ID (Pixel ID)', 'meta-conversions-api'),
             [$this, 'render_pixel_id_field'],
             'meta-conversions-api',
             'meta_capi_credentials'
@@ -139,6 +252,22 @@ class Meta_CAPI_Settings {
             [$this, 'render_test_event_code_field'],
             'meta-conversions-api',
             'meta_capi_advanced'
+        );
+
+        add_settings_field(
+            'meta_capi_enable_pixel',
+            __('Enable Meta Pixel Injection', 'meta-conversions-api'),
+            [$this, 'render_pixel_injection_field'],
+            'meta-conversions-api',
+            'meta_capi_tracking'
+        );
+
+        add_settings_field(
+            'meta_capi_disable_auto_config',
+            __('Disable Facebook Auto-Config', 'meta-conversions-api'),
+            [$this, 'render_disable_auto_config_field'],
+            'meta-conversions-api',
+            'meta_capi_tracking'
         );
 
         add_settings_field(
@@ -219,9 +348,13 @@ class Meta_CAPI_Settings {
                 'title' => __('Settings', 'meta-conversions-api'),
                 'url' => admin_url('options-general.php?page=meta-conversions-api'),
             ],
-            'documentation' => [
-                'title' => __('Documentation', 'meta-conversions-api'),
-                'url' => admin_url('options-general.php?page=meta-conversions-api&tab=documentation'),
+            'setup' => [
+                'title' => __('Setup Guide', 'meta-conversions-api'),
+                'url' => admin_url('options-general.php?page=meta-conversions-api&tab=setup'),
+            ],
+            'troubleshooting' => [
+                'title' => __('Troubleshooting', 'meta-conversions-api'),
+                'url' => admin_url('options-general.php?page=meta-conversions-api&tab=troubleshooting'),
             ],
             'tools' => [
                 'title' => __('Tools & Logs', 'meta-conversions-api'),
@@ -249,11 +382,18 @@ class Meta_CAPI_Settings {
         $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash($_GET['tab'])) : 'settings';
         
         switch ($tab) {
-            case 'documentation':
-                $this->render_documentation_page();
+            case 'setup':
+                $this->render_setup_guide_page();
+                break;
+            case 'troubleshooting':
+                $this->render_troubleshooting_page();
                 break;
             case 'tools':
                 $this->render_tools_page();
+                break;
+            // Legacy redirect for old 'documentation' tab
+            case 'documentation':
+                $this->render_setup_guide_page();
                 break;
             default:
                 $this->render_settings_page();
@@ -277,6 +417,65 @@ class Meta_CAPI_Settings {
         ?>
         <div class="wrap meta-capi-admin-wrap">
             <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
+            
+            <?php 
+            // Manually call admin notices since hook isn't firing
+            $this->show_admin_notices(); 
+            ?>
+
+            <?php
+            // Show recommendations panel if there are any
+            $plugin_instance = meta_capi();
+            if (isset($plugin_instance->system_status)) {
+                $status = $plugin_instance->system_status->get_status();
+                $has_recommendations = !empty($status['recommendations']);
+                $rec_count = count($status['recommendations'] ?? []);
+                
+                if ($has_recommendations) {
+                    ?>
+                    <div class="notice notice-info" style="position: relative; margin-top: 10px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 0;">
+                            <div>
+                                <strong>💡 <?php echo sprintf(esc_html__('%d Recommendation%s', 'meta-conversions-api'), $rec_count, $rec_count > 1 ? 's' : ''); ?></strong>
+                                <button type="button" class="button-link" id="toggle-recommendations" style="margin-left: 10px; text-decoration: none;">
+                                    <span class="dashicons dashicons-arrow-down-alt2" style="font-size: 16px; line-height: 1.2;"></span>
+                                    <?php esc_html_e('Show Details', 'meta-conversions-api'); ?>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="recommendations-content" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd; padding-right: 10px;">
+                            <?php foreach ($status['recommendations'] as $rec): ?>
+                                <div style="margin-bottom: 15px;">
+                                    <strong><?php echo esc_html($rec['title']); ?></strong><br>
+                                    <span style="color: #646970;"><?php echo esc_html($rec['message']); ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <script>
+                    jQuery(document).ready(function($) {
+                        $('#toggle-recommendations').on('click', function(e) {
+                            e.preventDefault();
+                            var content = $('#recommendations-content');
+                            var icon = $(this).find('.dashicons');
+                            var text = $(this).contents().filter(function(){ return this.nodeType === 3; }).last();
+                            
+                            if (content.is(':visible')) {
+                                content.slideUp(200);
+                                icon.removeClass('dashicons-arrow-up-alt2').addClass('dashicons-arrow-down-alt2');
+                                text[0].textContent = ' <?php esc_html_e('Show Details', 'meta-conversions-api'); ?>';
+                            } else {
+                                content.slideDown(200);
+                                icon.removeClass('dashicons-arrow-down-alt2').addClass('dashicons-arrow-up-alt2');
+                                text[0].textContent = ' <?php esc_html_e('Hide Details', 'meta-conversions-api'); ?>';
+                            }
+                        });
+                    });
+                    </script>
+                    <?php
+                }
+            }
+            ?>
 
             <?php $this->render_tabs('settings'); ?>
 
@@ -353,7 +552,7 @@ class Meta_CAPI_Settings {
         <div id="analytics-settings"></div>
         <p>
             <?php esc_html_e('This plugin sends completely anonymous usage data weekly to help us improve.', 'meta-conversions-api'); ?>
-            <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=documentation#anonymous-analytics')); ?>">
+            <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=setup#anonymous-analytics')); ?>">
                 <?php esc_html_e('Learn more about what data is collected', 'meta-conversions-api'); ?> →
             </a>
         </p>
@@ -375,7 +574,7 @@ class Meta_CAPI_Settings {
             placeholder="<?php esc_attr_e('1234567890123456', 'meta-conversions-api'); ?>"
         >
         <p class="description">
-            <?php esc_html_e('Your Facebook Dataset ID (15-16 digit number).', 'meta-conversions-api'); ?>
+            <?php esc_html_e('Your Facebook Dataset ID (formerly called Pixel ID) - a 15-16 digit number from Events Manager.', 'meta-conversions-api'); ?>
         </p>
         <?php
     }
@@ -430,8 +629,50 @@ class Meta_CAPI_Settings {
     }
 
     /**
-     * Render Page View tracking field.
+     * Render Pixel injection field.
      */
+    public function render_pixel_injection_field(): void {
+        $value = get_option('meta_capi_enable_pixel', true);
+        ?>
+        <label>
+            <input
+                type="checkbox"
+                name="meta_capi_enable_pixel"
+                id="meta_capi_enable_pixel"
+                value="1"
+                <?php checked($value, true); ?>
+            >
+            <?php esc_html_e('Automatically inject Meta Pixel code on all pages', 'meta-conversions-api'); ?>
+        </label>
+        <p class="description">
+            <?php esc_html_e('Adds the Meta Pixel (fbq) JavaScript to your site for browser-side tracking. Disable this if you already have the pixel installed via another method.', 'meta-conversions-api'); ?>
+        </p>
+        <?php
+    }
+
+    /**
+     * Render disable auto-config field.
+     */
+    public function render_disable_auto_config_field(): void {
+        $value = get_option('meta_capi_disable_auto_config', true);
+        ?>
+        <label>
+            <input
+                type="checkbox"
+                name="meta_capi_disable_auto_config"
+                id="meta_capi_disable_auto_config"
+                value="1"
+                <?php checked($value, true); ?>
+            >
+            <?php esc_html_e('Disable Facebook\'s automatic event tracking', 'meta-conversions-api'); ?>
+            <span style="color: #00a32a; margin-left: 8px;">✓ <?php esc_html_e('Recommended', 'meta-conversions-api'); ?></span>
+        </label>
+        <p class="description">
+            <?php esc_html_e('When enabled, prevents Facebook from automatically logging button clicks and other events. This keeps your event data clean by only tracking the specific events you configure. Recommended for accurate conversion tracking.', 'meta-conversions-api'); ?>
+        </p>
+        <?php
+    }
+
     public function render_page_view_field(): void {
         $value = get_option('meta_capi_enable_page_view', true);
         ?>
@@ -484,23 +725,106 @@ class Meta_CAPI_Settings {
      * Render WooCommerce tracking field.
      */
     public function render_woocommerce_tracking_field(): void {
+        $enabled = get_option('meta_capi_enable_woocommerce', false);
+        $wc_active = class_exists('WooCommerce');
+        
+        // Get individual event settings with proper defaults.
+        // If option doesn't exist (false returned), default to true for first-time setup.
+        $viewcontent_enabled = get_option('meta_capi_wc_enable_viewcontent');
+        if ($viewcontent_enabled === false) {
+            $viewcontent_enabled = true;
+        }
+        
+        $addtocart_enabled = get_option('meta_capi_wc_enable_addtocart');
+        if ($addtocart_enabled === false) {
+            $addtocart_enabled = true;
+        }
+        
+        $initiatecheckout_enabled = get_option('meta_capi_wc_enable_initiatecheckout');
+        if ($initiatecheckout_enabled === false) {
+            $initiatecheckout_enabled = true;
+        }
+        
+        $purchase_enabled = get_option('meta_capi_wc_enable_purchase');
+        if ($purchase_enabled === false) {
+            $purchase_enabled = true;
+        }
+        
+        $purchase_timing = get_option('meta_capi_wc_purchase_timing', 'placed');
+        if (empty($purchase_timing)) {
+            $purchase_timing = 'placed';
+        }
         ?>
-        <label style="opacity: 0.5;">
+        <label<?php echo !$wc_active ? ' style="opacity: 0.5;"' : ''; ?>>
             <input
                 type="checkbox"
                 name="meta_capi_enable_woocommerce"
                 id="meta_capi_enable_woocommerce"
                 value="1"
-                disabled
+                <?php checked($enabled, true); ?>
+                <?php disabled(!$wc_active); ?>
             >
-            <?php esc_html_e('Track WooCommerce purchase events', 'meta-conversions-api'); ?>
-            <span class="badge" style="background: #2271b1; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin-left: 8px; font-weight: 600;">
-                <?php esc_html_e('COMING SOON', 'meta-conversions-api'); ?>
-            </span>
+            <strong><?php esc_html_e('Enable WooCommerce Event Tracking', 'meta-conversions-api'); ?></strong>
+            <?php if (!$wc_active): ?>
+                <span style="color: #d63638; margin-left: 8px;">
+                    <?php esc_html_e('(WooCommerce not active)', 'meta-conversions-api'); ?>
+                </span>
+            <?php endif; ?>
         </label>
         <p class="description">
-            <?php esc_html_e('Track WooCommerce purchases, add to cart, and checkout events. This feature will be available in a future update.', 'meta-conversions-api'); ?>
+            <?php 
+            if ($wc_active) {
+                esc_html_e('Track WooCommerce events via Meta Pixel (browser) and Conversions API (server) for accurate conversion tracking.', 'meta-conversions-api');
+            } else {
+                esc_html_e('WooCommerce must be installed and activated to enable eCommerce tracking.', 'meta-conversions-api');
+            }
+            ?>
         </p>
+
+        <?php if ($wc_active && $enabled): ?>
+        <div style="margin-top: 15px; padding: 15px; background: #f6f7f9; border: 1px solid #dcdcde; border-radius: 4px;">
+            <h4 style="margin-top: 0;"><?php esc_html_e('WooCommerce Events', 'meta-conversions-api'); ?></h4>
+            
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="checkbox" name="meta_capi_wc_enable_viewcontent" value="1" <?php checked($viewcontent_enabled, true); ?>>
+                <?php esc_html_e('ViewContent (Product page views)', 'meta-conversions-api'); ?>
+            </label>
+
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="checkbox" name="meta_capi_wc_enable_addtocart" value="1" <?php checked($addtocart_enabled, true); ?>>
+                <?php esc_html_e('AddToCart (Items added to cart)', 'meta-conversions-api'); ?>
+            </label>
+
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="checkbox" name="meta_capi_wc_enable_initiatecheckout" value="1" <?php checked($initiatecheckout_enabled, true); ?>>
+                <?php esc_html_e('InitiateCheckout (Checkout started)', 'meta-conversions-api'); ?>
+            </label>
+
+            <label style="display: block; margin-bottom: 15px;">
+                <input type="checkbox" name="meta_capi_wc_enable_purchase" value="1" <?php checked($purchase_enabled, true); ?>>
+                <?php esc_html_e('Purchase (Order completed)', 'meta-conversions-api'); ?>
+            </label>
+
+            <hr style="margin: 15px 0; border: none; border-top: 1px solid #dcdcde;">
+
+            <h4 style="margin-bottom: 10px;"><?php esc_html_e('Purchase Event Timing', 'meta-conversions-api'); ?></h4>
+            <p class="description" style="margin-top: 0; margin-bottom: 10px;">
+                <?php esc_html_e('Choose when to send Purchase events to Facebook:', 'meta-conversions-api'); ?>
+            </p>
+
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="radio" name="meta_capi_wc_purchase_timing" value="placed" <?php checked($purchase_timing, 'placed'); ?>>
+                <strong><?php esc_html_e('When order is placed', 'meta-conversions-api'); ?></strong>
+                <span class="description"><?php esc_html_e('(includes unpaid orders like COD, bank transfer)', 'meta-conversions-api'); ?></span>
+            </label>
+
+            <label style="display: block;">
+                <input type="radio" name="meta_capi_wc_purchase_timing" value="paid" <?php checked($purchase_timing, 'paid'); ?>>
+                <strong><?php esc_html_e('When payment is confirmed', 'meta-conversions-api'); ?></strong>
+                <span class="description"><?php esc_html_e('(only paid orders, recommended for accurate ROAS)', 'meta-conversions-api'); ?></span>
+            </label>
+        </div>
+        <?php endif; ?>
         <?php
     }
 
@@ -591,61 +915,47 @@ class Meta_CAPI_Settings {
      * Show admin notices for debug mode and test event code.
      */
     public function show_admin_notices(): void {
-        // DEBUG: Temporary - remove after testing
-        error_log('Meta CAPI: show_admin_notices() called');
-        error_log('Meta CAPI: Screen ID = ' . (get_current_screen() ? get_current_screen()->id : 'NULL'));
-        
-        // Only show on plugin pages
-        $screen = get_current_screen();
-        if (!$screen || strpos($screen->id, 'meta-conversions-api') === false) {
-            error_log('Meta CAPI: Admin notices skipped - screen check failed');
-            return;
-        }
-        
-        error_log('Meta CAPI: Admin notices passed screen check!');
-
-        // Check for test connection result
+        // Test result notice
         $test_result = get_transient('meta_capi_test_result');
         if ($test_result) {
             delete_transient('meta_capi_test_result');
             $notice_class = $test_result['type'] === 'success' ? 'notice-success' : 'notice-error';
-            ?>
-            <div class="notice <?php echo esc_attr($notice_class); ?> is-dismissible">
-                <p><?php echo esc_html($test_result['message']); ?></p>
-            </div>
-            <?php
+            echo '<div class="notice ' . esc_attr($notice_class) . ' is-dismissible">';
+            echo '<p>' . esc_html($test_result['message']) . '</p>';
+            echo '</div>';
         }
 
-        // Warning for debug logging enabled
-        if (get_option('meta_capi_enable_logging', false)) {
-            ?>
-            <div class="notice notice-warning is-dismissible">
-                <p>
-                    <strong><?php esc_html_e('Meta CAPI Debug Logging Active', 'meta-conversions-api'); ?></strong><br>
-                    <?php esc_html_e('Debug logging is currently enabled. This will log all events and API requests. Remember to disable it once you\'re done troubleshooting.', 'meta-conversions-api'); ?>
-                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#debug-logging')); ?>"><?php esc_html_e('Disable in Tools & Logs', 'meta-conversions-api'); ?></a>
-                </p>
-            </div>
-            <?php
+        // Debug logging warning
+        if (get_option('meta_capi_enable_logging')) {
+            echo '<div class="notice notice-warning is-dismissible">';
+            echo '<p>';
+            echo '<strong>' . esc_html__('Meta CAPI Debug Logging Active', 'meta-conversions-api') . '</strong><br>';
+            echo esc_html__('Debug logging is currently enabled. This will log all events and API requests. Remember to disable it once you\'re done troubleshooting.', 'meta-conversions-api') . ' ';
+            echo '<a href="' . esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#debug-logging')) . '">';
+            echo esc_html__('Disable in Tools & Logs', 'meta-conversions-api');
+            echo '</a>';
+            echo '</p>';
+            echo '</div>';
         }
 
-        // Info notice for test event code active
+        // Test event code notice
         $test_code = get_option('meta_capi_test_event_code', '');
         if (!empty($test_code)) {
-            ?>
-            <div class="notice notice-info is-dismissible">
-                <p>
-                    <strong><?php esc_html_e('Test Event Mode Active', 'meta-conversions-api'); ?></strong><br>
-                    <?php 
-                    printf(
-                        esc_html__('Test Event Code (%s) is active. Events are being sent as test events and won\'t affect your production statistics.', 'meta-conversions-api'),
-                        '<code>' . esc_html($test_code) . '</code>'
-                    );
-                    ?>
-                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#test-event-code')); ?>"><?php esc_html_e('Remove in Settings', 'meta-conversions-api'); ?></a>
-                </p>
-            </div>
-            <?php
+            echo '<div class="notice notice-info is-dismissible">';
+            echo '<p>';
+            echo '<strong>' . esc_html__('Test Event Mode Active', 'meta-conversions-api') . '</strong><br>';
+            
+            $message = sprintf(
+                esc_html__('Test Event Code (%s) is active. Events are being sent as test events and won\'t affect your production statistics.', 'meta-conversions-api'),
+                '<code>' . esc_html($test_code) . '</code>'
+            );
+            echo $message . ' ';
+            
+            echo '<a href="' . esc_url(admin_url('options-general.php?page=meta-conversions-api#test-event-code')) . '">';
+            echo esc_html__('Remove in Settings', 'meta-conversions-api');
+            echo '</a>';
+            echo '</p>';
+            echo '</div>';
         }
     }
 
@@ -707,17 +1017,22 @@ class Meta_CAPI_Settings {
     }
 
     /**
-     * Render documentation page.
+     * Render setup guide page.
      */
-    public function render_documentation_page(): void {
+    public function render_setup_guide_page(): void {
         if (!current_user_can('manage_options')) {
             return;
         }
         ?>
         <div class="wrap meta-capi-admin-wrap">
-            <h1><?php esc_html_e('Meta Conversions API Documentation', 'meta-conversions-api'); ?></h1>
+            <h1><?php esc_html_e('Setup Guide', 'meta-conversions-api'); ?></h1>
+            
+            <?php 
+            // Manually call admin notices since hook isn't firing
+            $this->show_admin_notices(); 
+            ?>
 
-            <?php $this->render_tabs('documentation'); ?>
+            <?php $this->render_tabs('setup'); ?>
             
             <div class="meta-capi-admin-container">
                 <div class="meta-capi-admin-main">
@@ -727,12 +1042,21 @@ class Meta_CAPI_Settings {
                 <ul style="column-count: 2; column-gap: 30px; list-style: disc; margin-left: 20px;">
                     <li><a href="#quick-start"><?php esc_html_e('Quick Start Guide', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#what-tracked"><?php esc_html_e('What Gets Tracked', 'meta-conversions-api'); ?></a></li>
+                    <li><a href="#woocommerce-setup"><?php esc_html_e('WooCommerce Setup', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#privacy"><?php esc_html_e('Privacy & Data Handling', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#anonymous-analytics"><?php esc_html_e('Anonymous Usage Analytics', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#plugin-updates"><?php esc_html_e('Plugin Updates', 'meta-conversions-api'); ?></a></li>
-                    <li><a href="#troubleshooting"><?php esc_html_e('Troubleshooting', 'meta-conversions-api'); ?></a></li>
-                    <li><a href="#useful-links"><?php esc_html_e('Useful Links', 'meta-conversions-api'); ?></a></li>
                 </ul>
+                <p style="margin-top: 15px;">
+                    <?php 
+                    echo wp_kses_post(
+                        sprintf(
+                            __('Having issues? Check the <a href="%s">Troubleshooting</a> page.', 'meta-conversions-api'),
+                            esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=troubleshooting'))
+                        )
+                    );
+                    ?>
+                </p>
             </div>
 
             <div class="card" id="quick-start" style="max-width: 100%; margin-top: 20px;">
@@ -806,6 +1130,97 @@ class Meta_CAPI_Settings {
                     <li><?php esc_html_e('Custom form fields', 'meta-conversions-api'); ?></li>
                     <li><?php esc_html_e('Facebook browser cookies for better attribution', 'meta-conversions-api'); ?></li>
                 </ul>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('WooCommerce Events', 'meta-conversions-api'); ?></h3>
+                <p><?php esc_html_e('When WooCommerce tracking is enabled, the plugin tracks eCommerce events via both Meta Pixel (browser-side) and Conversions API (server-side) for maximum accuracy and deduplication:', 'meta-conversions-api'); ?></p>
+                
+                <h4 style="margin-top: 15px; font-size: 14px;"><?php esc_html_e('ViewContent', 'meta-conversions-api'); ?></h4>
+                <p><?php esc_html_e('Fires when a customer views a product page. Tracks product ID, name, price, category, and currency.', 'meta-conversions-api'); ?></p>
+
+                <h4 style="margin-top: 15px; font-size: 14px;"><?php esc_html_e('AddToCart', 'meta-conversions-api'); ?></h4>
+                <p><?php esc_html_e('Fires when a customer adds an item to their cart. Works with both AJAX and traditional add-to-cart buttons. Tracks product details, quantity, and value.', 'meta-conversions-api'); ?></p>
+
+                <h4 style="margin-top: 15px; font-size: 14px;"><?php esc_html_e('InitiateCheckout', 'meta-conversions-api'); ?></h4>
+                <p><?php esc_html_e('Fires when a customer reaches the checkout page. Tracks cart contents, total value, and item count.', 'meta-conversions-api'); ?></p>
+
+                <h4 style="margin-top: 15px; font-size: 14px;"><?php esc_html_e('Purchase', 'meta-conversions-api'); ?></h4>
+                <p><?php esc_html_e('Fires when an order is completed. You can configure when this event triggers:', 'meta-conversions-api'); ?></p>
+                <ul style="list-style: disc; margin-left: 20px; margin-top: 10px;">
+                    <li><strong><?php esc_html_e('When order is placed:', 'meta-conversions-api'); ?></strong> <?php esc_html_e('Tracks all orders immediately, including unpaid orders (COD, bank transfer). Good for measuring order volume.', 'meta-conversions-api'); ?></li>
+                    <li><strong><?php esc_html_e('When payment is confirmed:', 'meta-conversions-api'); ?></strong> <?php esc_html_e('Only tracks paid orders. Recommended for accurate ROAS (Return on Ad Spend) measurement.', 'meta-conversions-api'); ?></li>
+                </ul>
+
+                <div style="background: #f0f6fc; padding: 15px; border-left: 4px solid #2271b1; margin-top: 15px;">
+                    <strong><?php esc_html_e('⚙️ Configuration Note:', 'meta-conversions-api'); ?></strong>
+                    <p style="margin: 10px 0 0 0;">
+                        <?php esc_html_e('Each WooCommerce event can be individually enabled/disabled in', 'meta-conversions-api'); ?>
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#tracking-settings')); ?>">
+                            <?php esc_html_e('Tracking Settings', 'meta-conversions-api'); ?>
+                        </a>.
+                        <?php esc_html_e('Events are sent via both browser (Pixel) and server (CAPI) with automatic deduplication using event IDs.', 'meta-conversions-api'); ?>
+                    </p>
+                </div>
+
+                <h3 style="margin-top: 20px;"><?php esc_html_e('Facebook Auto-Config (Disabled by Default)', 'meta-conversions-api'); ?></h3>
+                <p><?php esc_html_e('This plugin automatically disables Facebook\'s "Auto-Config" feature to keep your event data clean. Without this, Facebook would automatically track button clicks, form submissions, and other interactions that you haven\'t explicitly configured.', 'meta-conversions-api'); ?></p>
+                
+                <p style="margin-top: 10px;"><strong><?php esc_html_e('Why This Matters:', 'meta-conversions-api'); ?></strong></p>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('Prevents noisy, irrelevant events from cluttering your Facebook Events Manager', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Ensures only the events YOU configure are tracked (PageView, Purchase, AddToCart, etc.)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Improves data accuracy for conversion optimization and reporting', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Recommended by Facebook for e-commerce sites', 'meta-conversions-api'); ?></li>
+                </ul>
+
+                <p style="margin-top: 10px;"><?php esc_html_e('You can enable Auto-Config in', 'meta-conversions-api'); ?>
+                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#tracking-settings')); ?>">
+                        <?php esc_html_e('Tracking Settings', 'meta-conversions-api'); ?>
+                    </a>
+                    <?php esc_html_e('if needed, but it\'s not recommended for most sites.', 'meta-conversions-api'); ?>
+                </p>
+            </div>
+
+            <div class="card" id="woocommerce-setup" style="max-width: 100%; margin-top: 20px;">
+                <h2><?php esc_html_e('WooCommerce Setup', 'meta-conversions-api'); ?></h2>
+                <p><?php esc_html_e('To enable WooCommerce event tracking:', 'meta-conversions-api'); ?></p>
+                
+                <ol style="line-height: 2;">
+                    <li>
+                        <?php esc_html_e('Ensure WooCommerce is installed and active', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <?php esc_html_e('Go to', 'meta-conversions-api'); ?>
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#tracking-settings')); ?>">
+                            <?php esc_html_e('Settings → Meta CAPI → Tracking Settings', 'meta-conversions-api'); ?>
+                        </a>
+                    </li>
+                    <li>
+                        <?php esc_html_e('Check "Enable WooCommerce Event Tracking"', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <?php esc_html_e('Configure which events to track (ViewContent, AddToCart, InitiateCheckout, Purchase)', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <?php esc_html_e('Choose your Purchase event timing:', 'meta-conversions-api'); ?>
+                        <ul style="list-style: disc; margin-left: 20px; margin-top: 10px;">
+                            <li><strong><?php esc_html_e('When order is placed:', 'meta-conversions-api'); ?></strong> <?php esc_html_e('For all orders including unpaid (default)', 'meta-conversions-api'); ?></li>
+                            <li><strong><?php esc_html_e('When payment is confirmed:', 'meta-conversions-api'); ?></strong> <?php esc_html_e('For accurate ROAS tracking (recommended for most stores)', 'meta-conversions-api'); ?></li>
+                        </ul>
+                    </li>
+                    <li>
+                        <?php esc_html_e('Save Settings', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <?php esc_html_e('Test by making a purchase and checking Facebook Events Manager', 'meta-conversions-api'); ?>
+                    </li>
+                </ol>
+
+                <div style="background: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin-top: 20px;">
+                    <strong><?php esc_html_e('💡 Pro Tip:', 'meta-conversions-api'); ?></strong>
+                    <p style="margin: 10px 0 0 0;">
+                        <?php esc_html_e('All WooCommerce events are tracked via BOTH browser (Meta Pixel) and server (Conversions API) with automatic deduplication. This provides the most accurate conversion tracking possible, even if customers use ad blockers or have browser restrictions.', 'meta-conversions-api'); ?>
+                    </p>
+                </div>
             </div>
 
             <div class="card" id="privacy" style="max-width: 100%; margin-top: 20px;">
@@ -918,22 +1333,61 @@ class Meta_CAPI_Settings {
                 </p>
             </div>
 
-            <div class="card" id="troubleshooting" style="max-width: 100%; margin-top: 20px;">
-                <h2><?php esc_html_e('Troubleshooting', 'meta-conversions-api'); ?></h2>
-                
-                <h3><?php esc_html_e('Events Not Showing in Facebook?', 'meta-conversions-api'); ?></h3>
+                </div>
+
+                <?php $this->render_sidebar(); ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * Render troubleshooting page.
+     */
+    public function render_troubleshooting_page(): void {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        ?>
+        <div class="wrap meta-capi-admin-wrap">
+            <h1><?php esc_html_e('Troubleshooting', 'meta-conversions-api'); ?></h1>
+            
+            <?php 
+            // Manually call admin notices since hook isn't firing
+            $this->show_admin_notices(); 
+            ?>
+
+            <?php $this->render_tabs('troubleshooting'); ?>
+            
+            <div class="meta-capi-admin-container">
+                <div class="meta-capi-admin-main">
+
+            <div class="card" id="events-not-showing" style="max-width: 100%;">
+                <h2><?php esc_html_e('Events Not Showing in Facebook?', 'meta-conversions-api'); ?></h2>
                 <ol style="line-height: 1.8;">
                     <li><?php esc_html_e('Verify your Dataset ID and Access Token are correct', 'meta-conversions-api'); ?></li>
-                    <li><?php esc_html_e('Enable Debug Logging in Settings', 'meta-conversions-api'); ?></li>
-                    <li><?php esc_html_e('Check logs in Tools & Logs page', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Enable Debug Logging in', 'meta-conversions-api'); ?>
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#debug-logging')); ?>">
+                            <?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?>
+                        </a>
+                    </li>
+                    <li><?php esc_html_e('Check logs in', 'meta-conversions-api'); ?>
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#log-viewer')); ?>">
+                            <?php esc_html_e('Tools & Logs page', 'meta-conversions-api'); ?>
+                        </a>
+                    </li>
                     <li><?php esc_html_e('Wait 1-2 minutes (Facebook processing delay)', 'meta-conversions-api'); ?></li>
                     <li><?php esc_html_e('Use Test Event Code to verify in Test Events tab', 'meta-conversions-api'); ?></li>
                 </ol>
+            </div>
 
-                <h3 style="margin-top: 20px;"><?php esc_html_e('Debug Log Management', 'meta-conversions-api'); ?></h3>
+            <div class="card" id="log-management" style="max-width: 100%; margin-top: 20px;">
+                <h2><?php esc_html_e('Debug Log Management', 'meta-conversions-api'); ?></h2>
                 <p>
                     <?php esc_html_e('View and download logs directly in the', 'meta-conversions-api'); ?> 
-                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#log-viewer')); ?>"><?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?></a> 
+                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#log-viewer')); ?>">
+                        <?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?>
+                    </a> 
                     <?php esc_html_e('page - no FTP required!', 'meta-conversions-api'); ?>
                 </p>
                 <p><strong><?php esc_html_e('Automatic Log Management:', 'meta-conversions-api'); ?></strong></p>
@@ -954,7 +1408,9 @@ class Meta_CAPI_Settings {
                 <ul style="line-height: 2;">
                     <li><a href="https://business.facebook.com/events_manager2" target="_blank"><?php esc_html_e('Facebook Events Manager', 'meta-conversions-api'); ?></a></li>
                     <li><a href="https://developers.facebook.com/docs/marketing-api/conversions-api" target="_blank"><?php esc_html_e('Facebook Conversions API Documentation', 'meta-conversions-api'); ?></a></li>
+                    <li><a href="https://developers.facebook.com/docs/meta-pixel" target="_blank"><?php esc_html_e('Meta Pixel Documentation', 'meta-conversions-api'); ?></a></li>
                     <li><a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>"><?php esc_html_e('Plugin Settings', 'meta-conversions-api'); ?></a></li>
+                    <li><a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=setup')); ?>"><?php esc_html_e('Setup Guide', 'meta-conversions-api'); ?></a></li>
                     <li><a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools')); ?>"><?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?></a></li>
                 </ul>
             </div>
@@ -1022,6 +1478,11 @@ class Meta_CAPI_Settings {
         ?>
         <div class="wrap meta-capi-admin-wrap">
             <h1><?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?></h1>
+            
+            <?php 
+            // Manually call admin notices since hook isn't firing
+            $this->show_admin_notices(); 
+            ?>
 
             <?php $this->render_tabs('tools'); ?>
             
@@ -1090,6 +1551,9 @@ class Meta_CAPI_Settings {
                 <h2><?php esc_html_e('System Status', 'meta-conversions-api'); ?></h2>
                 <table class="widefat">
                     <tbody>
+                        <tr style="background-color: #d5e8f7;">
+                            <td colspan="2" style="padding: 8px;"><strong><?php esc_html_e('System Information', 'meta-conversions-api'); ?></strong></td>
+                        </tr>
                         <tr>
                             <td style="width: 30%;"><strong><?php esc_html_e('Plugin Version', 'meta-conversions-api'); ?></strong></td>
                             <td><?php echo esc_html(META_CAPI_VERSION); ?></td>
@@ -1124,6 +1588,9 @@ class Meta_CAPI_Settings {
                                 ?>
                             </td>
                         </tr>
+                        <tr style="background-color: #d5e8f7;">
+                            <td colspan="2" style="padding: 8px;"><strong><?php esc_html_e('Configuration', 'meta-conversions-api'); ?></strong></td>
+                        </tr>
                         <tr>
                             <td><strong><?php esc_html_e('Dataset ID Configured', 'meta-conversions-api'); ?></strong></td>
                             <td><?php echo !empty(get_option('meta_capi_pixel_id')) ? '✅ ' . esc_html__('Yes', 'meta-conversions-api') : '❌ ' . esc_html__('No', 'meta-conversions-api'); ?></td>
@@ -1131,6 +1598,13 @@ class Meta_CAPI_Settings {
                         <tr>
                             <td><strong><?php esc_html_e('Access Token Configured', 'meta-conversions-api'); ?></strong></td>
                             <td><?php echo !empty(get_option('meta_capi_access_token')) ? '✅ ' . esc_html__('Yes', 'meta-conversions-api') : '❌ ' . esc_html__('No', 'meta-conversions-api'); ?></td>
+                        </tr>
+                        <tr>
+                            <td><strong><?php esc_html_e('Test Event Code', 'meta-conversions-api'); ?></strong></td>
+                            <td><?php echo !empty(get_option('meta_capi_test_event_code')) ? '🔵 ' . esc_html__('Active', 'meta-conversions-api') : '⚪ ' . esc_html__('Not Set', 'meta-conversions-api'); ?></td>
+                        </tr>
+                        <tr style="background-color: #d5e8f7;">
+                            <td colspan="2" style="padding: 8px;"><strong><?php esc_html_e('Tracking Features', 'meta-conversions-api'); ?></strong></td>
                         </tr>
                         <tr>
                             <td><strong><?php esc_html_e('Page View Tracking', 'meta-conversions-api'); ?></strong></td>
@@ -1144,9 +1618,8 @@ class Meta_CAPI_Settings {
                             <td><strong><?php esc_html_e('Debug Logging', 'meta-conversions-api'); ?></strong></td>
                             <td><?php echo get_option('meta_capi_enable_logging') ? '🟡 ' . esc_html__('Enabled', 'meta-conversions-api') : '⚪ ' . esc_html__('Disabled', 'meta-conversions-api'); ?></td>
                         </tr>
-                        <tr>
-                            <td><strong><?php esc_html_e('Test Event Code', 'meta-conversions-api'); ?></strong></td>
-                            <td><?php echo !empty(get_option('meta_capi_test_event_code')) ? '🔵 ' . esc_html__('Active', 'meta-conversions-api') : '⚪ ' . esc_html__('Not Set', 'meta-conversions-api'); ?></td>
+                        <tr style="background-color: #d5e8f7;">
+                            <td colspan="2" style="padding: 8px;"><strong><?php esc_html_e('Integrations', 'meta-conversions-api'); ?></strong></td>
                         </tr>
                         <tr>
                             <td><strong><?php esc_html_e('Elementor Pro', 'meta-conversions-api'); ?></strong></td>
@@ -1154,10 +1627,114 @@ class Meta_CAPI_Settings {
                         </tr>
                         <tr>
                             <td><strong><?php esc_html_e('WooCommerce', 'meta-conversions-api'); ?></strong></td>
-                            <td><?php echo class_exists('WooCommerce') ? '✅ ' . esc_html__('Active', 'meta-conversions-api') : '⚪ ' . esc_html__('Not Active', 'meta-conversions-api'); ?></td>
+                            <td>
+                                <?php 
+                                if (class_exists('WooCommerce')) {
+                                    echo '✅ ' . esc_html__('Active', 'meta-conversions-api');
+                                    if (defined('WC_VERSION')) {
+                                        echo ' (v' . esc_html(WC_VERSION) . ')';
+                                    }
+                                } else {
+                                    echo '⚪ ' . esc_html__('Not Active', 'meta-conversions-api');
+                                }
+                                ?>
+                            </td>
                         </tr>
+                        <?php
+                        // Get advanced system status
+                        $plugin_instance = meta_capi();
+                        if (isset($plugin_instance->system_status)) {
+                            $status = $plugin_instance->system_status->get_status();
+                            ?>
+                            <tr style="background-color: #d5e8f7; border-top: 2px solid #72aee6;">
+                                <td colspan="2" style="padding: 8px;"><strong><?php esc_html_e('Environment & Compatibility', 'meta-conversions-api'); ?></strong></td>
+                            </tr>
+                            <tr>
+                                <td><strong><?php esc_html_e('Hosting Provider', 'meta-conversions-api'); ?></strong></td>
+                                <td>
+                                    <?php 
+                                    if (!empty($status['hosting']['detected'])) {
+                                        echo '✅ ' . esc_html($status['hosting']['provider']);
+                                    } else {
+                                        echo '❓ ' . esc_html__('Standard/Unknown', 'meta-conversions-api');
+                                    }
+                                    ?>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong><?php esc_html_e('CDN', 'meta-conversions-api'); ?></strong></td>
+                                <td>
+                                    <?php 
+                                    if (!empty($status['cdn']['cloudflare'])) {
+                                        echo '✅ Cloudflare';
+                                        if ($status['cdn']['cloudflare_enterprise']) {
+                                            echo ' <span style="color: #d63638; font-weight: bold;">(Enterprise)</span>';
+                                        }
+                                        if (!empty($status['cdn']['cloudflare_status'])) {
+                                            echo ' - ' . esc_html($status['cdn']['cloudflare_status']);
+                                        }
+                                    } elseif (!empty($status['cdn']['other_cdn'])) {
+                                        echo '✅ ' . esc_html($status['cdn']['cdn_name']);
+                                    } else {
+                                        echo '⚪ ' . esc_html__('Not Detected', 'meta-conversions-api');
+                                    }
+                                    ?>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td><strong><?php esc_html_e('Caching Plugins', 'meta-conversions-api'); ?></strong></td>
+                                <td>
+                                    <?php 
+                                    if (!empty($status['caching_plugins']['detected'])) {
+                                        echo '✅ ' . esc_html(implode(', ', $status['caching_plugins']['plugins']));
+                                    } else {
+                                        echo '⚪ ' . esc_html__('None Detected', 'meta-conversions-api');
+                                    }
+                                    ?>
+                                </td>
+                            </tr>
+                            <?php
+                        }
+                        ?>
                     </tbody>
                 </table>
+                
+                <?php
+                // Display warnings and recommendations
+                if (isset($status) && (!empty($status['warnings']) || !empty($status['recommendations']))) {
+                    ?>
+                    <div style="margin-top: 20px;">
+                        <?php if (!empty($status['warnings'])): ?>
+                            <?php foreach ($status['warnings'] as $warning): ?>
+                                <div class="notice notice-<?php echo esc_attr($warning['level'] === 'error' ? 'error' : 'warning'); ?> inline" style="margin: 10px 0;">
+                                    <p>
+                                        <strong><?php echo esc_html($warning['title']); ?></strong><br>
+                                        <?php echo esc_html($warning['message']); ?>
+                                    </p>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+
+                        <?php if (!empty($status['recommendations'])): ?>
+                            <?php foreach ($status['recommendations'] as $rec): ?>
+                                <div class="notice notice-info inline" style="margin: 10px 0;">
+                                    <p>
+                                        <strong><?php echo esc_html($rec['title']); ?></strong><br>
+                                        <?php echo esc_html($rec['message']); ?>
+                                    </p>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </div>
+                    <?php
+                } elseif (isset($status)) {
+                    ?>
+                    <div class="notice notice-success inline" style="margin-top: 15px;">
+                        <p>✅ <strong><?php esc_html_e('All compatibility checks passed!', 'meta-conversions-api'); ?></strong></p>
+                    </div>
+                    <?php
+                }
+                ?>
             </div>
 
 
@@ -1180,6 +1757,9 @@ class Meta_CAPI_Settings {
                         <a href="<?php echo esc_url(wp_nonce_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools&download_log=1'), 'meta_capi_download_log')); ?>" class="button button-secondary">
                             <?php esc_html_e('Download Log File', 'meta-conversions-api'); ?>
                         </a>
+                        <button type="button" id="copy-log-btn" class="button button-secondary" style="margin-left: 8px;">
+                            📋 <?php esc_html_e('Copy to Clipboard', 'meta-conversions-api'); ?>
+                        </button>
                     </p>
                     
                     <details style="margin-top: 15px;">
@@ -1193,7 +1773,7 @@ class Meta_CAPI_Settings {
                         $recent_logs = array_slice(array_reverse($log_lines), 0, 20);
                         ?>
                         
-                        <div style="background: #f0f0f1; padding: 15px; border-radius: 4px; max-height: 500px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; margin-top: 10px;">
+                        <div id="log-content" style="background: #f0f0f1; padding: 15px; border-radius: 4px; max-height: 500px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; margin-top: 10px;">
                             <?php
                             foreach ($recent_logs as $log_entry) {
                                 if (trim($log_entry)) {
@@ -1205,39 +1785,62 @@ class Meta_CAPI_Settings {
                             ?>
                         </div>
                     </details>
+                    
+                    <script>
+                    document.getElementById('copy-log-btn').addEventListener('click', function() {
+                        const logContent = <?php echo json_encode($log_content); ?>;
+                        navigator.clipboard.writeText(logContent).then(() => {
+                            const btn = this;
+                            const originalText = btn.innerHTML;
+                            btn.innerHTML = '✅ <?php esc_html_e('Copied!', 'meta-conversions-api'); ?>';
+                            btn.style.background = '#00a32a';
+                            btn.style.borderColor = '#00a32a';
+                            btn.style.color = '#fff';
+                            setTimeout(() => {
+                                btn.innerHTML = originalText;
+                                btn.style.background = '';
+                                btn.style.borderColor = '';
+                                btn.style.color = '';
+                            }, 2000);
+                        }).catch(err => {
+                            alert('<?php esc_html_e('Failed to copy. Please copy manually.', 'meta-conversions-api'); ?>');
+                        });
+                    });
+                    </script>
+                    
+                    <!-- Clear Logs Section -->
+                    <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #dcdcde;">
+                        <h3><?php esc_html_e('Clear Logs', 'meta-conversions-api'); ?></h3>
+                        <p><?php esc_html_e('Remove all debug log files. This action cannot be undone.', 'meta-conversions-api'); ?></p>
+                        
+                        <?php
+                        $log_files = glob($log_dir . '/meta-capi-*.log');
+                        $total_size = 0;
+                        if ($log_files) {
+                            foreach ($log_files as $file) {
+                                $total_size += filesize($file);
+                            }
+                        }
+                        ?>
+                        
+                        <p>
+                            <strong><?php esc_html_e('Current logs:', 'meta-conversions-api'); ?></strong>
+                            <?php echo count($log_files); ?> <?php esc_html_e('files', 'meta-conversions-api'); ?>
+                            (<?php echo esc_html(size_format($total_size)); ?>)
+                        </p>
+                        
+                        <form method="post" onsubmit="return confirm('<?php esc_attr_e('Are you sure you want to delete all log files? This cannot be undone.', 'meta-conversions-api'); ?>');">
+                            <?php wp_nonce_field('meta_capi_clear_logs'); ?>
+                            <input type="hidden" name="clear_logs" value="1">
+                            <button type="submit" class="button button-secondary">
+                                <?php esc_html_e('Clear All Logs', 'meta-conversions-api'); ?>
+                            </button>
+                        </form>
+                    </div>
+                    
                 <?php else: ?>
                     <p><?php esc_html_e('No log file found for today. Logs will be created when events are tracked.', 'meta-conversions-api'); ?></p>
                 <?php endif; ?>
-            </div>
-
-            <!-- Clear Logs -->
-            <div class="card" style="max-width: 100%; margin-top: 20px;">
-                <h2><?php esc_html_e('Clear Logs', 'meta-conversions-api'); ?></h2>
-                <p><?php esc_html_e('Remove all debug log files. This action cannot be undone.', 'meta-conversions-api'); ?></p>
-                
-                <?php
-                $log_files = glob($log_dir . '/meta-capi-*.log');
-                $total_size = 0;
-                if ($log_files) {
-                    foreach ($log_files as $file) {
-                        $total_size += filesize($file);
-                    }
-                }
-                ?>
-                
-                <p>
-                    <strong><?php esc_html_e('Current logs:', 'meta-conversions-api'); ?></strong>
-                    <?php echo count($log_files); ?> <?php esc_html_e('files', 'meta-conversions-api'); ?>
-                    (<?php echo esc_html(size_format($total_size)); ?>)
-                </p>
-                
-                <form method="post" onsubmit="return confirm('<?php esc_attr_e('Are you sure you want to delete all log files? This cannot be undone.', 'meta-conversions-api'); ?>');">
-                    <?php wp_nonce_field('meta_capi_clear_logs'); ?>
-                    <input type="hidden" name="clear_logs" value="1">
-                    <button type="submit" class="button button-secondary">
-                        <?php esc_html_e('Clear All Logs', 'meta-conversions-api'); ?>
-                    </button>
-                </form>
             </div>
 
             <!-- Log File Location -->

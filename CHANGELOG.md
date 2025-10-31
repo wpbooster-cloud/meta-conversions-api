@@ -1,6 +1,33 @@
 # Changelog
 
-All notable changes to Meta Conversions API will be documented in this file.
+All notable changes to Meta Pixel & Conversions API will be documented in this file.
+
+## [2.0.0] - TBD
+
+### Added
+- **Meta Pixel Integration** - Browser-side tracking via Meta Pixel
+  - Automatic pixel injection (can be disabled)
+  - Coordinated event tracking with CAPI
+  - Event deduplication between browser and server
+- **Full WooCommerce Integration**
+  - ViewContent event on product pages
+  - AddToCart event (simple and variable products)
+  - InitiateCheckout event on checkout page
+  - Purchase event on order completion
+  - Individual event toggles for granular control
+  - Purchase event timing control (order placed vs. payment confirmed)
+- **Auto-Config Disable** - Option to disable Facebook's automatic event tracking for cleaner data
+- **Split Documentation** - Separate Setup Guide and Troubleshooting tabs for better UX
+
+### Improved
+- Enhanced system status with WooCommerce and Pixel detection
+- Better admin notices with collapsible recommendations panel
+- Improved event tracking with dual Pixel + CAPI coverage
+- More granular control over what events to track
+
+### Changed
+- Plugin renamed to "Meta Pixel & Conversions API" to reflect dual tracking capabilities
+- PHP requirement increased to 8.0+ for better type safety and performance
 
 ## [1.0.5] - 2025-10-29
 
@@ -78,8 +105,8 @@ All notable changes to Meta Conversions API will be documented in this file.
   - Proper capability checks
   - Input sanitization and output escaping
 
-### Coming Soon
-- WooCommerce integration
-- Additional form builder support
-- Contact Form 7 integration
+### Future Plans
+- Additional form builder support (Contact Form 7, Gravity Forms, etc.)
+- Advanced matching parameters
+- Custom audience sync
 

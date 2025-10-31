@@ -1,14 +1,17 @@
-# Meta Conversions API for WordPress
+# Meta Pixel & Conversions API for WordPress
 
-A comprehensive WordPress plugin that integrates with Facebook (Meta) Conversions API to track page views and Elementor Pro form submissions.
+A complete Meta tracking solution combining Pixel (browser-side) and Conversions API (server-side) for accurate event tracking. Supports page views, Elementor Pro forms, and WooCommerce with automatic event deduplication.
 
 ## Features
 
-- **Page View Tracking**: Automatically sends PageView events to Facebook Conversions API
+- **Dual Tracking**: Meta Pixel (browser-side) + Conversions API (server-side) for maximum accuracy
+- **WooCommerce Integration**: Full event tracking for ViewContent, AddToCart, InitiateCheckout, and Purchase
+- **Page View Tracking**: Automatically sends PageView events via both Pixel and CAPI
 - **Elementor Pro Integration**: Tracks form submissions as Lead events
+- **Event Deduplication**: Automatically prevents duplicate events between Pixel and CAPI
 - **Privacy-Compliant**: Properly hashes PII data according to Facebook requirements
-- **Event Deduplication**: Generates unique event IDs to prevent duplicate events
-- **Debug Logging**: Optional logging for troubleshooting
+- **Auto-Config Control**: Disable Facebook's automatic event tracking for cleaner data
+- **Debug Logging**: Optional logging with automatic management (10MB cap, 30-day retention)
 - **Test Mode**: Support for Facebook Test Event Code
 - **Extensible**: Hooks and filters for custom implementations
 
@@ -17,7 +20,8 @@ A comprehensive WordPress plugin that integrates with Facebook (Meta) Conversion
 - WordPress 6.0 or higher
 - PHP 8.0 or higher
 - Elementor Pro (optional, for form tracking)
-- Facebook Dataset ID (formerly Pixel ID)
+- WooCommerce (optional, for eCommerce tracking)
+- Facebook Dataset ID (Pixel ID)
 - Facebook Conversions API Access Token
 
 ## Installation
@@ -57,8 +61,11 @@ The plugin automatically checks for updates from GitHub weekly. When a new versi
 
 ### Plugin Settings
 
-- **Enable Page View Tracking**: Track all page views on your site
-- **Enable Form Submission Tracking**: Track Elementor Pro form submissions
+- **Enable Meta Pixel Injection**: Automatically inject Meta Pixel for browser-side tracking
+- **Enable Page View Tracking**: Track all page views via Pixel + CAPI
+- **Enable Form Submission Tracking**: Track Elementor Pro form submissions as Lead events
+- **Enable WooCommerce Tracking**: Track ViewContent, AddToCart, InitiateCheckout, and Purchase events
+- **Disable Auto-Config**: Prevent Facebook's automatic event tracking (recommended)
 - **Enable Debug Logging**: Log all API requests (for troubleshooting only)
 
 ## Usage
@@ -66,8 +73,9 @@ The plugin automatically checks for updates from GitHub weekly. When a new versi
 ### Automatic Tracking
 
 Once configured, the plugin automatically tracks:
-- Page views on all public pages
-- Elementor Pro form submissions
+- Page views on all public pages (via Pixel + CAPI)
+- Elementor Pro form submissions as Lead events
+- WooCommerce product views, add to cart, checkout initiation, and purchases (via Pixel + CAPI)
 
 ### Manual Event Tracking
 
@@ -199,19 +207,26 @@ For issues, questions, or feature requests, please contact support or visit the 
 
 ## Changelog
 
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
+
+### 2.0.0 (Development)
+- **NEW**: Meta Pixel integration for browser-side tracking
+- **NEW**: Full WooCommerce event tracking (ViewContent, AddToCart, InitiateCheckout, Purchase)
+- **NEW**: Automatic event deduplication between Pixel and CAPI
+- **NEW**: Purchase event timing control (order placed vs. payment confirmed)
+- **NEW**: Auto-config disable option for cleaner Facebook tracking
+- **IMPROVED**: Split documentation into Setup Guide and Troubleshooting tabs
+- **IMPROVED**: Enhanced system status with WooCommerce detection
+
 ### 1.0.0
 - Initial release
-- Page view tracking
+- Page view tracking via Conversions API
 - Elementor Pro form submission tracking
 - Admin settings page with tabbed navigation
-- Debug logging with automatic management:
-  - 10MB file size cap per log file
-  - Automatic log rotation
-  - 30-day retention with automatic cleanup
-  - Built-in log viewer (no FTP required)
+- Debug logging with automatic management
 - Test event functionality
 - System status dashboard
-- WooCommerce tracking (coming soon)
+- Automatic updates from GitHub
 
 ## License
 
