@@ -2,32 +2,61 @@
 
 All notable changes to Meta Pixel & Conversions API will be documented in this file.
 
-## [2.0.0] - TBD
+## [2.0.0] - 2025-10-31
 
 ### Added
-- **Meta Pixel Integration** - Browser-side tracking via Meta Pixel
-  - Automatic pixel injection (can be disabled)
-  - Coordinated event tracking with CAPI
-  - Event deduplication between browser and server
-- **Full WooCommerce Integration**
-  - ViewContent event on product pages
-  - AddToCart event (simple and variable products)
-  - InitiateCheckout event on checkout page
-  - Purchase event on order completion
-  - Individual event toggles for granular control
-  - Purchase event timing control (order placed vs. payment confirmed)
-- **Auto-Config Disable** - Option to disable Facebook's automatic event tracking for cleaner data
-- **Split Documentation** - Separate Setup Guide and Troubleshooting tabs for better UX
+
+#### Meta Pixel Integration
+- Automatic pixel injection for browser-side tracking (can be disabled)
+- Coordinated event tracking with Conversions API
+- Automatic event deduplication between browser and server
+- Option to disable Facebook's auto-config for cleaner data
+
+#### Full WooCommerce Support
+Track complete eCommerce journey with granular control:
+- **ViewContent** - Product page views
+- **AddToCart** - Items added to cart (supports simple and variable products)
+- **InitiateCheckout** - Checkout page visits
+- **Purchase** - Order completion with configurable timing
+- Individual event toggles for each event type
+- Purchase event timing: "When order is placed" or "When payment is confirmed"
+
+#### Tracking Exceptions
+- **Page Exclusions** - Searchable multi-select interface to exclude specific pages from tracking
+- **Form Exclusions** - Searchable multi-select interface to exclude specific Elementor forms from tracking
+- Auto-cleanup of deleted/unpublished forms from exclusion list
+- Auto-removal of missing pages from exclusion list
+
+#### Enhanced Documentation
+- Split into **Setup Guide** and **Troubleshooting** tabs for better organization
+- Comprehensive WooCommerce setup instructions
+- Better navigation and user experience
 
 ### Improved
 - Enhanced system status with WooCommerce and Pixel detection
-- Better admin notices with collapsible recommendations panel
-- Improved event tracking with dual Pixel + CAPI coverage
+- Collapsible recommendations panel in settings
+- Dual Pixel + CAPI coverage for maximum tracking accuracy
+- Excluded favicon and non-page requests from PageView tracking
+- Added fallback purchase hook for better payment gateway compatibility
+- Auto-enabled WooCommerce event defaults on first activation
 - More granular control over what events to track
+- Admin orders automatically skipped to prevent data pollution
+- Simplified browser-side tracking architecture
 
 ### Changed
 - Plugin renamed to "Meta Pixel & Conversions API" to reflect dual tracking capabilities
 - PHP requirement increased to 8.0+ for better type safety and performance
+- Test Event Code moved to main credentials section for better visibility
+- Error Notifications section renamed from "Testing" for clarity
+
+### Fixed
+- Fixed add to cart 500 error (event ID generation)
+- Fixed purchase event hook reliability
+- Fixed WooCommerce event defaults not enabling on first activation
+- Fixed duplicate Lead events from Elementor forms
+- Fixed form exclusion not working in browser-side tracking
+- Fixed page exclusions not working consistently
+- Fixed Purchase event timing "payment confirmed" sending browser-side events on thank-you page
 
 ## [1.0.5] - 2025-10-29
 

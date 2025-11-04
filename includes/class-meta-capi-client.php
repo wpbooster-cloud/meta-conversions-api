@@ -135,7 +135,8 @@ class Meta_CAPI_Client {
             ]);
 
             // Track failure for admin notification
-            $this->track_api_failure($error_message);
+            $event_name = $event_data['event_name'] ?? 'Unknown';
+            $this->track_api_failure($error_message, $event_name, 0);
 
             return [
                 'success' => false,
@@ -166,7 +167,8 @@ class Meta_CAPI_Client {
             ]);
 
             // Track failure for admin notification
-            $this->track_api_failure($error_message);
+            $event_name = $event_data['event_name'] ?? 'Unknown';
+            $this->track_api_failure($error_message, $event_name, $response_code);
 
             return [
                 'success' => false,
@@ -354,8 +356,15 @@ class Meta_CAPI_Client {
      * Track API failures and send admin notification if threshold reached.
      *
      * @param string $error_message Error message.
+     * @param string $event_name Event name (optional).
+     * @param int    $response_code HTTP response code (optional).
      */
-    private function track_api_failure(string $error_message): void {
+    private function track_api_failure(string $error_message, string $event_name = '', int $response_code = 0): void {
+        // Check if notifications are enabled.
+        if (!get_option('meta_capi_enable_error_notifications', true)) {
+            return;
+        }
+        
         // Get current failure count (resets after 1 hour)
         $failure_count = get_transient('meta_capi_failure_count');
         $failure_count = $failure_count ? (int) $failure_count + 1 : 1;
@@ -363,58 +372,108 @@ class Meta_CAPI_Client {
         // Store failure count
         set_transient('meta_capi_failure_count', $failure_count, HOUR_IN_SECONDS);
         
-        // Store last error for reference
+        // Store failure details.
+        $failures = get_transient('meta_capi_failure_details');
+        $failures = is_array($failures) ? $failures : [];
+        
+        $failure_entry = [
+            'timestamp' => current_time('mysql'),
+            'event_name' => $event_name ?: 'Unknown',
+            'error' => $error_message,
+            'response_code' => $response_code,
+        ];
+        
+        // Keep last 10 failures for reporting.
+        $failures[] = $failure_entry;
+        if (count($failures) > 10) {
+            $failures = array_slice($failures, -10);
+        }
+        
+        set_transient('meta_capi_failure_details', $failures, HOUR_IN_SECONDS);
         set_transient('meta_capi_last_error', $error_message, DAY_IN_SECONDS);
         
-        // Send notification after 5 failures in 1 hour (but max once per day)
-        if ($failure_count >= 5 && !get_transient('meta_capi_alert_sent')) {
-            $this->send_failure_notification($failure_count, $error_message);
+        // Get threshold setting.
+        $threshold = get_option('meta_capi_notification_threshold', 5);
+        
+        // Send notification if threshold reached (but max once per day)
+        if ($failure_count >= $threshold && !get_transient('meta_capi_alert_sent')) {
+            $this->send_failure_notification($failure_count, $failures);
         }
     }
 
     /**
      * Send email notification to admin about API failures.
      *
-     * @param int    $failure_count Number of failures.
-     * @param string $last_error Last error message.
+     * @param int   $failure_count Number of failures.
+     * @param array $failures Array of failure details.
      */
-    private function send_failure_notification(int $failure_count, string $last_error): void {
-        $admin_email = get_option('admin_email');
+    private function send_failure_notification(int $failure_count, array $failures): void {
+        // Get notification email (or default to admin email).
+        $notification_email = get_option('meta_capi_notification_email', '');
+        if (empty($notification_email) || !is_email($notification_email)) {
+            $notification_email = get_option('admin_email');
+        }
+        
         $site_name = get_bloginfo('name');
+        $site_url = home_url();
+        $domain = wp_parse_url($site_url, PHP_URL_HOST);
         $settings_url = admin_url('options-general.php?page=meta-conversions-api');
+        $troubleshooting_url = admin_url('options-general.php?page=meta-conversions-api&tab=troubleshooting');
         
         $subject = sprintf(
-            /* translators: %s: Site name */
-            __('[%s] Meta Conversions API: Connection Issues Detected', 'meta-conversions-api'),
-            $site_name
-        );
-        
-        $message = sprintf(
-            /* translators: 1: Failure count, 2: Error message, 3: Settings URL */
-            __(
-                "Hello,\n\n" .
-                "The Meta Conversions API plugin on %1\$s has detected connection issues.\n\n" .
-                "Details:\n" .
-                "- Failures detected: %2\$d in the last hour\n" .
-                "- Last error: %3\$s\n\n" .
-                "Recommended actions:\n" .
-                "1. Verify your Facebook Dataset ID and Access Token are correct\n" .
-                "2. Check that your Access Token hasn't expired\n" .
-                "3. Ensure your Facebook Business Manager account is active\n\n" .
-                "View settings: %4\$s\n\n" .
-                "This notification will not be sent again for 24 hours.\n\n" .
-                "---\n" .
-                "Meta Conversions API Plugin by WP Booster",
-                'meta-conversions-api'
-            ),
+            /* translators: 1: Site name, 2: Domain */
+            __('[%1$s - %2$s] Meta Pixel & Conversions API: Connection Issues Detected', 'meta-conversions-api'),
             $site_name,
-            $failure_count,
-            $last_error,
-            $settings_url
+            $domain
         );
         
-        // Send email
-        $sent = wp_mail($admin_email, $subject, $message);
+        // Group failures by event type and error message.
+        $event_summary = [];
+        $unique_errors = [];
+        
+        foreach ($failures as $failure) {
+            $event_type = $failure['event_name'] ?? 'Unknown';
+            if (!isset($event_summary[$event_type])) {
+                $event_summary[$event_type] = 0;
+            }
+            $event_summary[$event_type]++;
+            
+            $error_key = $failure['error'];
+            if (!isset($unique_errors[$error_key])) {
+                $unique_errors[$error_key] = [
+                    'error' => $failure['error'],
+                    'response_code' => $failure['response_code'],
+                    'count' => 0,
+                ];
+            }
+            $unique_errors[$error_key]['count']++;
+        }
+        
+        // Get recent unique errors (last 5).
+        $recent_errors = array_slice($unique_errors, -5, 5, true);
+        
+        // Build HTML email.
+        $message = $this->build_failure_email_html(
+            $site_name,
+            $domain,
+            $failure_count,
+            $event_summary,
+            $recent_errors,
+            $failures,
+            $settings_url,
+            $troubleshooting_url
+        );
+        
+        // Set content type for HTML email.
+        add_filter('wp_mail_content_type', function() {
+            return 'text/html';
+        });
+        
+        // Send email.
+        $sent = wp_mail($notification_email, $subject, $message);
+        
+        // Reset content type.
+        remove_all_filters('wp_mail_content_type');
         
         if ($sent) {
             // Mark alert as sent (expires in 24 hours)
@@ -423,9 +482,196 @@ class Meta_CAPI_Client {
             // Log notification
             $this->logger->info('Admin notification sent for API failures', [
                 'failure_count' => $failure_count,
-                'admin_email' => $admin_email,
+                'notification_email' => $notification_email,
             ]);
         }
+    }
+    
+    /**
+     * Build HTML email content for failure notification.
+     *
+     * @param string $site_name Site name.
+     * @param string $domain Site domain.
+     * @param int    $failure_count Total failure count.
+     * @param array  $event_summary Event type summary.
+     * @param array  $recent_errors Recent unique errors.
+     * @param array  $all_failures All failure details.
+     * @param string $settings_url Settings page URL.
+     * @param string $troubleshooting_url Troubleshooting page URL.
+     * @return string HTML email content.
+     */
+    private function build_failure_email_html(
+        string $site_name,
+        string $domain,
+        int $failure_count,
+        array $event_summary,
+        array $recent_errors,
+        array $all_failures,
+        string $settings_url,
+        string $troubleshooting_url
+    ): string {
+        ob_start();
+        ?>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title><?php echo esc_html__('Meta Pixel & Conversions API Error Notification', 'meta-conversions-api'); ?></title>
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+            <div style="background-color: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                
+                <h1 style="color: #d63638; margin-top: 0; font-size: 24px; border-bottom: 2px solid #d63638; padding-bottom: 10px;">
+                    <?php echo esc_html__('Meta Pixel & Conversions API: Connection Issues Detected', 'meta-conversions-api'); ?>
+                </h1>
+                
+                <p style="font-size: 16px; margin-top: 20px;">
+                    <?php
+                    printf(
+                        /* translators: 1: Site name, 2: Domain */
+                        esc_html__('Hello,', 'meta-conversions-api')
+                    );
+                    ?>
+                </p>
+                
+                <p style="font-size: 16px;">
+                    <?php
+                    printf(
+                        /* translators: 1: Site name, 2: Domain, 3: Failure count */
+                        esc_html__('The Meta Pixel & Conversions API plugin on %1$s (%2$s) has detected %3$d API connection failure(s) in the last hour.', 'meta-conversions-api'),
+                        '<strong>' . esc_html($site_name) . '</strong>',
+                        esc_html($domain),
+                        $failure_count
+                    );
+                    ?>
+                </p>
+                
+                <p style="font-size: 16px;">
+                    <?php esc_html_e('This email was sent to alert you to potential connection issues that may prevent events from being tracked on Facebook.', 'meta-conversions-api'); ?>
+                </p>
+                
+                <h2 style="color: #23282d; font-size: 20px; margin-top: 30px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 20px;">
+                    <?php esc_html_e('Failure Summary', 'meta-conversions-api'); ?>
+                </h2>
+                
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f9f9f9; border-radius: 4px; overflow: hidden;">
+                    <thead>
+                        <tr style="background-color: #23282d; color: #fff;">
+                            <th style="padding: 12px; text-align: left; font-weight: 600;"><?php esc_html_e('Event Type', 'meta-conversions-api'); ?></th>
+                            <th style="padding: 12px; text-align: center; font-weight: 600;"><?php esc_html_e('Failures', 'meta-conversions-api'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (!empty($event_summary)): ?>
+                            <?php foreach ($event_summary as $event_type => $count): ?>
+                                <tr style="border-bottom: 1px solid #ddd;">
+                                    <td style="padding: 10px 12px;"><?php echo esc_html($event_type); ?></td>
+                                    <td style="padding: 10px 12px; text-align: center; font-weight: 600; color: #d63638;"><?php echo esc_html($count); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="2" style="padding: 12px; text-align: center; color: #646970;">
+                                    <?php esc_html_e('No event type information available', 'meta-conversions-api'); ?>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+                
+                <?php if (!empty($recent_errors)): ?>
+                    <h2 style="color: #23282d; font-size: 20px; margin-top: 30px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 20px;">
+                        <?php esc_html_e('Recent Error Details', 'meta-conversions-api'); ?>
+                    </h2>
+                    
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f9f9f9; border-radius: 4px; overflow: hidden;">
+                        <thead>
+                            <tr style="background-color: #23282d; color: #fff;">
+                                <th style="padding: 12px; text-align: left; font-weight: 600;"><?php esc_html_e('Error Message', 'meta-conversions-api'); ?></th>
+                                <?php if (!empty(array_filter(array_column($recent_errors, 'response_code')))): ?>
+                                    <th style="padding: 12px; text-align: center; font-weight: 600;"><?php esc_html_e('Response Code', 'meta-conversions-api'); ?></th>
+                                <?php endif; ?>
+                                <th style="padding: 12px; text-align: center; font-weight: 600;"><?php esc_html_e('Occurrences', 'meta-conversions-api'); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($recent_errors as $error_data): ?>
+                                <tr style="border-bottom: 1px solid #ddd;">
+                                    <td style="padding: 10px 12px; word-break: break-word;"><?php echo esc_html($error_data['error']); ?></td>
+                                    <?php if (!empty(array_filter(array_column($recent_errors, 'response_code')))): ?>
+                                        <td style="padding: 10px 12px; text-align: center;">
+                                            <?php echo $error_data['response_code'] > 0 ? esc_html($error_data['response_code']) : '—'; ?>
+                                        </td>
+                                    <?php endif; ?>
+                                    <td style="padding: 10px 12px; text-align: center; font-weight: 600;"><?php echo esc_html($error_data['count']); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+                
+                <h2 style="color: #23282d; font-size: 20px; margin-top: 30px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 20px;">
+                    <?php esc_html_e('Troubleshooting Steps', 'meta-conversions-api'); ?>
+                </h2>
+                
+                <ol style="padding-left: 20px; line-height: 1.8;">
+                    <li>
+                        <strong><?php esc_html_e('Verify Credentials', 'meta-conversions-api'); ?></strong><br>
+                        <?php esc_html_e('Check that your Facebook Dataset ID (Pixel ID) and Access Token are correct in the plugin settings.', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <strong><?php esc_html_e('Check Access Token Expiration', 'meta-conversions-api'); ?></strong><br>
+                        <?php esc_html_e('Access tokens can expire. Generate a new one in Facebook Events Manager if needed.', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <strong><?php esc_html_e('Verify Facebook Business Manager', 'meta-conversions-api'); ?></strong><br>
+                        <?php esc_html_e('Ensure your Facebook Business Manager account is active and has proper permissions.', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <strong><?php esc_html_e('Review Debug Logs', 'meta-conversions-api'); ?></strong><br>
+                        <?php
+                        printf(
+                            /* translators: %s: Troubleshooting URL */
+                            esc_html__('Enable debug logging and review detailed error information in the %s section.', 'meta-conversions-api'),
+                            '<a href="' . esc_url($troubleshooting_url) . '">' . esc_html__('Tools & Logs', 'meta-conversions-api') . '</a>'
+                        );
+                        ?>
+                    </li>
+                    <li>
+                        <strong><?php esc_html_e('Check Server Connectivity', 'meta-conversions-api'); ?></strong><br>
+                        <?php esc_html_e('Ensure your server can reach Facebook\'s API endpoints (graph.facebook.com). Some hosting providers may block external API calls.', 'meta-conversions-api'); ?>
+                    </li>
+                </ol>
+                
+                <div style="background-color: #f0f6fc; border-left: 4px solid #2271b1; padding: 15px; margin: 25px 0; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 14px;">
+                        <strong><?php esc_html_e('Quick Links:', 'meta-conversions-api'); ?></strong><br>
+                        <a href="<?php echo esc_url($settings_url); ?>" style="color: #2271b1; text-decoration: none;"><?php esc_html_e('Plugin Settings', 'meta-conversions-api'); ?></a> | 
+                        <a href="<?php echo esc_url($troubleshooting_url); ?>" style="color: #2271b1; text-decoration: none;"><?php esc_html_e('Troubleshooting Guide', 'meta-conversions-api'); ?></a> | 
+                        <a href="https://developers.facebook.com/docs/marketing-api/conversions-api" target="_blank" style="color: #2271b1; text-decoration: none;"><?php esc_html_e('Facebook Documentation', 'meta-conversions-api'); ?></a> | 
+                        <a href="https://developers.facebook.com/docs/meta-pixel" target="_blank" style="color: #2271b1; text-decoration: none;"><?php esc_html_e('Meta Pixel Docs', 'meta-conversions-api'); ?></a>
+                    </p>
+                </div>
+                
+                <p style="font-size: 14px; color: #646970; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                    <?php
+                    printf(
+                        /* translators: %s: Site name */
+                        esc_html__('This notification will not be sent again for 24 hours. If issues persist, please review your plugin settings and check the troubleshooting guide.', 'meta-conversions-api')
+                    );
+                    ?>
+                </p>
+                
+                <p style="font-size: 12px; color: #8c8f94; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+                    <?php esc_html_e('Meta Pixel & Conversions API Plugin by WP Booster', 'meta-conversions-api'); ?><br>
+                    <?php echo esc_html($domain); ?>
+                </p>
+            </div>
+        </body>
+        </html>
+        <?php
+        return ob_get_clean();
     }
 }
 

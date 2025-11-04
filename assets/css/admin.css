@@ -318,3 +318,130 @@ hr {
     }
 }
 
+/* Multi-select Searchable Selector Styles */
+.meta-capi-multiselect {
+    max-width: 100%;
+}
+
+.meta-capi-search-box {
+    position: relative;
+    margin-bottom: 10px;
+}
+
+.meta-capi-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1.5;
+    background: #fff;
+}
+
+.meta-capi-search-input:focus {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+    outline: none;
+}
+
+.meta-capi-search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+}
+
+.meta-capi-search-result-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f1;
+    transition: background-color 0.15s;
+}
+
+.meta-capi-search-result-item:last-child {
+    border-bottom: none;
+}
+
+.meta-capi-search-result-item:hover {
+    background-color: #f6f7f7;
+}
+
+.meta-capi-search-result-item .description {
+    color: #646970;
+    font-size: 12px;
+}
+
+.meta-capi-search-no-results,
+.meta-capi-search-error {
+    padding: 12px;
+    color: #646970;
+    text-align: center;
+}
+
+.meta-capi-search-error {
+    color: #d63638;
+}
+
+.meta-capi-selected-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 40px;
+    padding: 8px;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    background: #f6f7f7;
+}
+
+.meta-capi-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    background: #2271b1;
+    color: #fff;
+    border-radius: 3px;
+    font-size: 13px;
+    line-height: 1.5;
+    gap: 6px;
+}
+
+.meta-capi-tag-text {
+    flex: 1;
+}
+
+.meta-capi-tag-remove {
+    background: transparent;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+    margin-left: 4px;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+    transition: background-color 0.15s;
+}
+
+.meta-capi-tag-remove:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.meta-capi-tag-remove:focus {
+    outline: 2px solid rgba(255, 255, 255, 0.5);
+    outline-offset: 2px;
+}
+

@@ -77,6 +77,7 @@ class Meta_CAPI_Scripts {
             'wc_enable_addtocart'     => (bool) get_option('meta_capi_wc_enable_addtocart', true),
             'wc_enable_checkout'      => (bool) get_option('meta_capi_wc_enable_initiatecheckout', true),
             'wc_enable_purchase'      => (bool) get_option('meta_capi_wc_enable_purchase', true),
+            'wc_purchase_timing'      => get_option('meta_capi_wc_purchase_timing', 'placed'),
         ];
 
         // Debug mode check.
@@ -134,10 +135,12 @@ class Meta_CAPI_Scripts {
         // Determine what needs to load.
         $load_pixel = $this->should_load_pixel_script();
         $load_wc_events = $this->should_load_wc_events();
+        $load_elementor_forms = $this->should_load_elementor_forms();
 
         $this->logger->log('Script loading decision', 'info', [
             'load_pixel' => $load_pixel,
             'load_wc_events' => $load_wc_events,
+            'load_elementor_forms' => $load_elementor_forms,
         ]);
 
         // Load Meta Pixel helper script.
@@ -150,8 +153,13 @@ class Meta_CAPI_Scripts {
             $this->enqueue_wc_events_script();
         }
 
+        // Load Elementor forms script.
+        if ($load_elementor_forms) {
+            $this->enqueue_elementor_forms_script();
+        }
+
         // Localize scripts.
-        if ($load_pixel || $load_wc_events) {
+        if ($load_pixel || $load_wc_events || $load_elementor_forms) {
             $this->localize_scripts();
         }
     }
@@ -191,8 +199,37 @@ class Meta_CAPI_Scripts {
             return false;
         }
 
-        // Only load on WooCommerce pages.
-        return $this->is_woocommerce_page();
+        // Load on all frontend pages (not just WooCommerce pages) to support AJAX add-to-cart
+        // from product widgets, shortcodes, or other non-WooCommerce pages.
+        // The JavaScript will only fire events on relevant WooCommerce pages/actions.
+        if (is_admin() || wp_doing_ajax() || wp_doing_cron()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if Elementor forms script should load.
+     *
+     * @return bool True if should load.
+     */
+    private function should_load_elementor_forms(): bool {
+        // Elementor Pro must be active and form tracking enabled.
+        if (!did_action('elementor_pro/init')) {
+            return false;
+        }
+
+        if (!$this->settings['enable_form_tracking']) {
+            return false;
+        }
+
+        // Don't load in admin/AJAX/cron.
+        if (is_admin() || wp_doing_ajax() || wp_doing_cron()) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -281,6 +318,31 @@ class Meta_CAPI_Scripts {
     }
 
     /**
+     * Enqueue Elementor forms script.
+     *
+     * @return void
+     */
+    private function enqueue_elementor_forms_script(): void {
+        $suffix = $this->debug_mode ? '' : '.min';
+        
+        // Check if minified version exists, otherwise use non-minified
+        $script_path = META_CAPI_PLUGIN_DIR . 'assets/js/elementor-forms' . $suffix . '.js';
+        if ($suffix && !file_exists($script_path)) {
+            $suffix = ''; // Fallback to non-minified
+        }
+        
+        wp_enqueue_script(
+            'meta-capi-elementor-forms',
+            META_CAPI_PLUGIN_URL . 'assets/js/elementor-forms' . $suffix . '.js',
+            ['jquery'], // Depends on jQuery
+            META_CAPI_VERSION,
+            true // Load in footer
+        );
+
+        $this->logger->log('Elementor forms script enqueued', 'info', ['suffix' => $suffix]);
+    }
+
+    /**
      * Localize scripts with configuration data.
      *
      * @return void
@@ -323,6 +385,7 @@ class Meta_CAPI_Scripts {
             'is_cart' => is_cart(),
             'is_checkout' => is_checkout(),
             'is_order_received' => is_order_received_page(),
+            'purchase_timing' => $this->settings['wc_purchase_timing'] ?? 'placed',
         ];
 
         // Product page data.
@@ -379,11 +442,26 @@ class Meta_CAPI_Scripts {
 
         // Order received (thank you) page data.
         if (is_order_received_page()) {
-            $order_id = isset($_GET['order-received']) ? absint($_GET['order-received']) : 0;
+            // WooCommerce stores order ID in query vars, not $_GET directly.
+            global $wp;
+            $order_id = 0;
+            
+            // Try multiple methods to get order ID.
+            if (isset($wp->query_vars['order-received'])) {
+                $order_id = absint($wp->query_vars['order-received']);
+            } elseif (isset($_GET['order-received'])) {
+                $order_id = absint($_GET['order-received']);
+            } elseif (function_exists('wc_get_order_id_by_order_key')) {
+                // Fallback: try to get order by key if order-received is missing.
+                $order_key = isset($_GET['key']) ? sanitize_text_field(wp_unslash($_GET['key'])) : '';
+                if ($order_key) {
+                    $order_id = wc_get_order_id_by_order_key($order_key);
+                }
+            }
             
             if ($order_id > 0) {
                 $order = wc_get_order($order_id);
-                if ($order) {
+                if ($order && $order->get_status() !== 'trash') {
                     $content_ids = [];
                     $contents = [];
 

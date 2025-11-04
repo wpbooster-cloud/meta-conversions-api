@@ -66,6 +66,17 @@ class Meta_CAPI_Tracking {
             return;
         }
 
+        // Check if this page is excluded.
+        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
+        if (!empty($excluded_pages_str)) {
+            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
+            $current_page_id = get_queried_object_id();
+            if (in_array($current_page_id, $excluded_pages, true)) {
+                $this->logger->info('PageView skipped - page is in exclusion list', ['page_id' => $current_page_id]);
+                return;
+            }
+        }
+        
         // Allow filtering to skip tracking on specific pages.
         if (apply_filters('meta_capi_skip_page_view', false)) {
             return;

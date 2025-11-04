@@ -192,32 +192,59 @@
              * Track Purchase event on thank you page
              */
             trackPurchase: function() {
-                if (typeof metaCAPIWooCommerceData === 'undefined' || !metaCAPIWooCommerceData.is_order_received) {
+                if (typeof metaCAPIWooCommerceData === 'undefined') {
+                    console.warn('Meta CAPI: WooCommerce data not available for Purchase tracking');
+                    return;
+                }
+
+                if (!metaCAPIWooCommerceData.is_order_received) {
+                    console.log('Meta CAPI: Not on order received page, skipping Purchase event');
+                    return;
+                }
+
+                // Skip browser-side Purchase if timing is set to "payment confirmed" (server-only).
+                const purchaseTiming = metaCAPIWooCommerceData.purchase_timing || 'placed';
+                if (purchaseTiming === 'paid') {
+                    console.log('Meta CAPI: Purchase timing set to "payment confirmed", skipping browser-side event (server-only tracking)');
                     return;
                 }
 
                 const orderData = metaCAPIWooCommerceData.order;
                 if (!orderData || !orderData.id) {
+                    console.warn('Meta CAPI: Order data not available', {
+                        has_order_data: !!orderData,
+                        wc_data: metaCAPIWooCommerceData
+                    });
                     return;
                 }
 
                 // Use order ID as unique identifier for deduplication with server
                 const eventId = 'purchase_' + orderData.id;
 
-                fbq('track', 'Purchase', {
+                // Ensure we have required values
+                const purchaseData = {
                     content_ids: orderData.content_ids || [],
                     contents: orderData.contents || [],
                     content_type: 'product',
-                    value: orderData.value || 0,
-                    currency: orderData.currency,
-                    num_items: orderData.num_items || 0
-                }, {
+                    value: parseFloat(orderData.value) || 0,
+                    currency: orderData.currency || metaCAPIWooCommerceData.currency || 'USD',
+                    num_items: parseInt(orderData.num_items) || 0
+                };
+
+                if (typeof fbq === 'undefined') {
+                    console.error('Meta CAPI: Facebook Pixel (fbq) not loaded. Purchase event not tracked.');
+                    return;
+                }
+
+                fbq('track', 'Purchase', purchaseData, {
                     eventID: eventId
                 });
 
-                console.log('Meta CAPI: Purchase event tracked', {
+                console.log('Meta CAPI: Purchase event tracked (browser-side)', {
                     order_id: orderData.id,
-                    value: orderData.value,
+                    value: purchaseData.value,
+                    currency: purchaseData.currency,
+                    num_items: purchaseData.num_items,
                     event_id: eventId
                 });
             }

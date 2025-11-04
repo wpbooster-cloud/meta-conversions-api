@@ -195,6 +195,13 @@ class Meta_CAPI_WooCommerce {
                 return;
             }
 
+            // Skip if order was placed by an admin (prevents polluting data).
+            $user_id = $order->get_user_id();
+            if ($user_id > 0 && user_can($user_id, 'manage_options') && apply_filters('meta_capi_skip_admin_tracking', true)) {
+                $this->logger->log('Purchase skipped - order placed by admin', 'info', ['order_id' => $order_id, 'user_id' => $user_id]);
+                return;
+            }
+
             // Check if we've already tracked this order (prevent duplicates).
             $already_tracked = $order->get_meta('_meta_capi_purchase_tracked', true);
             if ($already_tracked) {

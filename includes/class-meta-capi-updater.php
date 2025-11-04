@@ -240,7 +240,7 @@ class Meta_CAPI_Updater {
             'homepage' => "https://github.com/{$this->github_repo}",
             'download_url' => $download_url,
             'requires' => '6.0',
-            'tested' => '6.7',
+            'tested' => '6.8', // Tested with WordPress 6.8
             'requires_php' => '8.0',
             'last_updated' => $release->published_at,
             'description' => 'Complete Meta tracking solution with Pixel (browser-side) and Conversions API (server-side). Supports page views, Elementor Pro forms, and WooCommerce events with automatic deduplication.',

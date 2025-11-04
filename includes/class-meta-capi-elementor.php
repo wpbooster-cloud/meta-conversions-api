@@ -64,6 +64,70 @@ class Meta_CAPI_Elementor {
         $form_name = $record->get_form_settings('form_name');
         $form_id = $record->get_form_settings('id');
         $raw_fields = $record->get('fields');
+        
+        // Check if this form is excluded.
+        $excluded_forms_str = get_option('meta_capi_exclude_forms', '');
+        if (!empty($excluded_forms_str)) {
+            // Parse excluded forms (already sanitized with sanitize_key when saved).
+            $excluded_forms = array_filter(array_map('trim', explode(',', $excluded_forms_str)));
+            
+            // Normalize function: ensure consistent matching.
+            // We normalize by removing ALL non-alphanumeric characters (spaces, hyphens, underscores, etc.)
+            // This ensures "Contact Form", "contact-form", "contact_form" all match "contactform".
+            $normalize = function($value) {
+                if (empty($value)) {
+                    return '';
+                }
+                
+                // Convert to string and ensure we have valid UTF-8.
+                $str = (string) $value;
+                
+                // Remove any BOM or invisible characters.
+                $str = preg_replace('/^\xEF\xBB\xBF/', '', $str); // UTF-8 BOM
+                $str = trim($str);
+                
+                // Convert to lowercase using standard strtolower (handles ASCII reliably).
+                $normalized = strtolower($str);
+                
+                // Remove ALL non-alphanumeric characters (spaces, punctuation, everything).
+                // This regex should handle all standard ASCII and most Unicode letters/numbers.
+                $normalized = preg_replace('/[^a-z0-9]/i', '', $normalized);
+                
+                return $normalized;
+            };
+            
+            // Normalize form_id and form_name for comparison.
+            $normalized_form_id = $normalize($form_id);
+            $normalized_form_name = $normalize($form_name);
+            
+            // Also normalize excluded forms list.
+            $normalized_excluded = array_map($normalize, $excluded_forms);
+            
+            // Check if form_id matches.
+            $is_excluded_by_id = in_array($normalized_form_id, $normalized_excluded, true);
+            
+            // Check if form_name matches.
+            $is_excluded_by_name = in_array($normalized_form_name, $normalized_excluded, true);
+            
+            // Check if form_id matches any excluded form with counter suffix (handles duplicate forms).
+            $is_excluded_by_prefix = false;
+            foreach ($normalized_excluded as $excluded_id) {
+                if (strpos($excluded_id, $normalized_form_id . '_') === 0 || strpos($normalized_form_id, $excluded_id . '_') === 0) {
+                    $is_excluded_by_prefix = true;
+                    break;
+                }
+            }
+            
+            // Check if form is excluded (by ID, name, or prefix match).
+            if ($is_excluded_by_id || $is_excluded_by_name || $is_excluded_by_prefix) {
+                $this->logger->info('Lead event skipped - form is in exclusion list', [
+                    'form_name' => $form_name,
+                    'form_id' => $form_id,
+                    'match_type' => $is_excluded_by_id ? 'id' : ($is_excluded_by_name ? 'name' : 'prefix'),
+                ]);
+                return;
+            }
+        }
 
         $this->logger->info('Elementor form submitted', [
             'form_name' => $form_name,
@@ -133,13 +197,74 @@ class Meta_CAPI_Elementor {
         // Allow filtering by form ID.
         $event_data = apply_filters("meta_capi_form_submission_event_data_{$form_id}", $event_data, $record, $fields);
 
-        // Send the event.
+        // Generate event ID BEFORE sending - use consistent format for deduplication.
+        // Format: lead_[form_id]_[timestamp]_[random] - this must match exactly between browser and server.
+        $timestamp = time();
+        $random = wp_generate_password(12, false);
+        $event_id = 'lead_' . sanitize_key($form_id) . '_' . $timestamp . '_' . $random;
+        $event_data['event_id'] = $event_id;
+
+        // Check if current page is excluded (for browser-side tracking prevention).
+        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
+        $current_page_id = get_queried_object_id();
+        $is_page_excluded = false;
+        if (!empty($excluded_pages_str) && $current_page_id > 0) {
+            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
+            $is_page_excluded = in_array($current_page_id, $excluded_pages, true);
+            if ($is_page_excluded) {
+                $this->logger->info('PageView and Lead events skipped - page is in exclusion list', [
+                    'page_id' => $current_page_id,
+                    'form_id' => $form_id,
+                ]);
+            }
+        }
+
+        // Send the event via Conversions API (server-side).
+        // NOTE: This works independently of browser pixel injection.
+        // Server-side events will appear in Facebook, but may not show prominently
+        // in the "Test Events" tab (which focuses on browser pixel events).
         $result = $this->client->send_event($event_data);
 
         if ($result['success']) {
-            $this->logger->info('Lead event sent successfully', [
+            $this->logger->info('Lead event sent successfully (server-side)', [
                 'form_name' => $form_name,
+                'event_id' => $event_id,
             ]);
+
+            // Fire browser-side Lead event for Facebook Test Events visibility.
+            // BUT: Skip if form is excluded OR page is excluded.
+            // Only pass browser-side tracking if NOT excluded.
+            if (!$is_page_excluded && method_exists($ajax_handler, 'add_response_data')) {
+                // Pass event data as JSON object for JavaScript to read.
+                $tracking_data = [
+                    'event_id' => $event_id,
+                    'form_id' => $form_id,
+                    'form_name' => $form_name,
+                    'lead_params' => [
+                        'content_name' => sanitize_text_field($form_name),
+                        'content_category' => 'lead',
+                        'source' => 'elementor_form'
+                    ],
+                ];
+                
+                // Add to AJAX response - JavaScript will read this and fire the Lead event.
+                // We only pass the data object; JavaScript handles the actual firing to prevent duplicates.
+                $ajax_handler->add_response_data('meta_capi_lead_tracking', $tracking_data);
+
+                // Log that we attempted browser-side tracking.
+                $this->logger->info('Browser-side Lead event queued', [
+                    'form_id' => $form_id,
+                    'event_id' => $event_id,
+                    'method' => 'elementor_ajax',
+                ]);
+            } else {
+                // Log why browser-side tracking was skipped.
+                $reason = $is_page_excluded ? 'page excluded' : 'ajax handler method not available';
+                $this->logger->info('Browser-side Lead event skipped', [
+                    'form_id' => $form_id,
+                    'reason' => $reason,
+                ]);
+            }
         } else {
             $this->logger->error('Failed to send lead event', [
                 'form_name' => $form_name,

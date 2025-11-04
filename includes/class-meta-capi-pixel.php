@@ -89,7 +89,7 @@ class Meta_CAPI_Pixel {
             'disable_auto_config' => (bool) get_option('meta_capi_disable_auto_config', true),
         ];
 
-        $this->logger->log('Pixel settings loaded', 'info', $this->settings);
+        $this->logger->info('Pixel settings loaded', $this->settings);
     }
 
     /**
@@ -102,7 +102,7 @@ class Meta_CAPI_Pixel {
         if ($this->auto_inject && !empty($this->pixel_id)) {
             add_action('wp_head', [$this, 'inject_pixel_code'], 5);
             add_action('wp_footer', [$this, 'inject_pixel_noscript'], 100);
-            $this->logger->log('Pixel injection hooks registered', 'info');
+            $this->logger->info('Pixel injection hooks registered');
         }
 
         // Admin hooks for pixel detection.
@@ -122,23 +122,38 @@ class Meta_CAPI_Pixel {
     public function inject_pixel_code(): void {
         // Don't inject for logged-in admins (optional).
         if ($this->should_skip_tracking()) {
-            $this->logger->log('Skipping pixel injection for current user', 'info');
+            $this->logger->info('Skipping pixel injection for current user');
             return;
         }
 
         // Validate pixel ID format (should be numeric).
         if (!$this->is_valid_pixel_id($this->pixel_id)) {
-            $this->logger->log('Invalid pixel ID format', 'error', ['pixel_id' => $this->pixel_id]);
+            $this->logger->error('Invalid pixel ID format', ['pixel_id' => $this->pixel_id]);
             return;
         }
 
         // Check if pixel is already on page (prevent duplicates).
         if ($this->is_pixel_already_loaded()) {
-            $this->logger->log('Pixel already detected on page, skipping injection', 'info');
+            $this->logger->info('Pixel already detected on page, skipping injection');
             return;
         }
 
-        $this->logger->log('Injecting Meta Pixel code', 'info', ['pixel_id' => $this->pixel_id]);
+        // Check if current page is excluded from tracking.
+        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
+        $current_page_id = get_queried_object_id();
+        $is_page_excluded = false;
+        if (!empty($excluded_pages_str) && $current_page_id > 0) {
+            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
+            $is_page_excluded = in_array($current_page_id, $excluded_pages, true);
+            if ($is_page_excluded) {
+                $this->logger->info('Pixel injection skipped - page is in exclusion list', [
+                    'page_id' => $current_page_id,
+                ]);
+                return; // Don't inject pixel at all on excluded pages.
+            }
+        }
+
+        $this->logger->info('Injecting Meta Pixel code', ['pixel_id' => $this->pixel_id]);
         
         ?>
         <!-- Meta Pixel Code (Meta Conversions API Plugin) -->
@@ -157,6 +172,9 @@ class Meta_CAPI_Pixel {
         <?php endif; ?>
         fbq('init', '<?php echo esc_js($this->pixel_id); ?>');
         <?php if (!$this->settings['disable_auto_config']): ?>
+        fbq('track', 'PageView');
+        <?php else: ?>
+        // Manual PageView when auto_config is disabled (to match server-side tracking)
         fbq('track', 'PageView');
         <?php endif; ?>
         </script>
@@ -206,11 +224,11 @@ class Meta_CAPI_Pixel {
         $cached = get_transient('meta_capi_pixel_detection');
         if ($cached !== false) {
             $this->existing_pixel_detected = (bool) $cached;
-            $this->logger->log('Pixel detection from cache', 'info', ['detected' => $this->existing_pixel_detected]);
+            $this->logger->info('Pixel detection from cache', ['detected' => $this->existing_pixel_detected]);
             return;
         }
 
-        $this->logger->log('Running pixel detection scan', 'info');
+        $this->logger->info('Running pixel detection scan');
 
         // Fetch homepage HTML.
         $response = wp_remote_get(
@@ -223,7 +241,7 @@ class Meta_CAPI_Pixel {
         );
 
         if (is_wp_error($response)) {
-            $this->logger->log('Pixel detection failed', 'error', ['error' => $response->get_error_message()]);
+            $this->logger->error('Pixel detection failed', ['error' => $response->get_error_message()]);
             $this->existing_pixel_detected = false;
             set_transient('meta_capi_pixel_detection', 0, DAY_IN_SECONDS);
             return;
@@ -241,7 +259,7 @@ class Meta_CAPI_Pixel {
         $this->existing_pixel_detected = $detected;
         set_transient('meta_capi_pixel_detection', $detected ? 1 : 0, DAY_IN_SECONDS);
 
-        $this->logger->log('Pixel detection complete', 'info', [
+        $this->logger->info('Pixel detection complete', [
             'detected'   => $detected,
             'cached_for' => '24 hours',
         ]);
@@ -338,7 +356,7 @@ class Meta_CAPI_Pixel {
             $timestamp
         );
 
-        $this->logger->log('Generated event ID', 'info', [
+        $this->logger->info('Generated event ID', [
             'event_type' => $event_type,
             'identifier' => $identifier,
             'event_id'   => $event_id,
@@ -369,7 +387,7 @@ class Meta_CAPI_Pixel {
         $event_data_json = wp_json_encode($event_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
         
         if ($event_data_json === false) {
-            $this->logger->log('Failed to encode event data', 'error', ['event_name' => $event_name]);
+            $this->logger->error('Failed to encode event data', ['event_name' => $event_name]);
             return;
         }
 
@@ -410,7 +428,7 @@ class Meta_CAPI_Pixel {
         delete_transient('meta_capi_pixel_detection');
         delete_transient('meta_capi_pixel_conflict_warning');
         $this->existing_pixel_detected = null;
-        $this->logger->log('Pixel detection cache cleared', 'info');
+        $this->logger->info('Pixel detection cache cleared');
     }
 }
 

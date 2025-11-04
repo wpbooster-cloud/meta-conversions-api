@@ -1,6 +1,6 @@
 <?php
 /**
- * Settings page for Meta Conversions API.
+ * Settings page for Meta Pixel & Conversions API.
  *
  * @package Meta_Conversions_API
  */
@@ -23,6 +23,9 @@ class Meta_CAPI_Settings {
         add_action('admin_menu', [$this, 'add_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
+        add_action('wp_ajax_meta_capi_search_pages', [$this, 'ajax_search_pages']);
+        add_action('wp_ajax_meta_capi_search_forms', [$this, 'ajax_search_forms']);
+        add_action('wp_ajax_meta_capi_load_forms', [$this, 'ajax_load_forms']);
         
         // Initialize WooCommerce event defaults when WooCommerce tracking is enabled.
         add_action('update_option_meta_capi_enable_woocommerce', [$this, 'maybe_initialize_wc_defaults'], 10, 2);
@@ -92,8 +95,8 @@ class Meta_CAPI_Settings {
     public function add_settings_page(): void {
         // Main settings page under Settings menu
         add_options_page(
-            __('Meta Conversions API', 'meta-conversions-api'),
-            __('Meta CAPI', 'meta-conversions-api'),
+            __('Meta Pixel & Conversions API', 'meta-conversions-api'),
+            __('Meta Pixel & CAPI', 'meta-conversions-api'),
             'manage_options',
             'meta-conversions-api',
             [$this, 'render_main_page']
@@ -199,6 +202,38 @@ class Meta_CAPI_Settings {
             'sanitize_callback' => 'rest_sanitize_boolean',
             'default' => false,
         ]);
+        
+        // Tracking exceptions.
+        register_setting('meta_capi_settings', 'meta_capi_exclude_pages', [
+            'type' => 'string',
+            'sanitize_callback' => [$this, 'sanitize_page_ids_string'],
+            'default' => '',
+        ]);
+        
+        register_setting('meta_capi_settings', 'meta_capi_exclude_forms', [
+            'type' => 'string',
+            'sanitize_callback' => [$this, 'sanitize_form_ids_string'],
+            'default' => '',
+        ]);
+        
+        // Error notification settings.
+        register_setting('meta_capi_settings', 'meta_capi_enable_error_notifications', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => true,
+        ]);
+        
+        register_setting('meta_capi_settings', 'meta_capi_notification_email', [
+            'type' => 'string',
+            'sanitize_callback' => [$this, 'sanitize_email'],
+            'default' => '',
+        ]);
+        
+        register_setting('meta_capi_settings', 'meta_capi_notification_threshold', [
+            'type' => 'integer',
+            'sanitize_callback' => [$this, 'sanitize_threshold'],
+            'default' => 5,
+        ]);
 
         // Add settings sections.
         add_settings_section(
@@ -216,8 +251,15 @@ class Meta_CAPI_Settings {
         );
 
         add_settings_section(
+            'meta_capi_exceptions',
+            __('Tracking Exceptions', 'meta-conversions-api'),
+            [$this, 'render_exceptions_section'],
+            'meta-conversions-api'
+        );
+        
+        add_settings_section(
             'meta_capi_advanced',
-            __('Testing', 'meta-conversions-api'),
+            __('Error Notifications', 'meta-conversions-api'),
             [$this, 'render_advanced_section'],
             'meta-conversions-api'
         );
@@ -251,7 +293,7 @@ class Meta_CAPI_Settings {
             __('Test Event Code', 'meta-conversions-api'),
             [$this, 'render_test_event_code_field'],
             'meta-conversions-api',
-            'meta_capi_advanced'
+            'meta_capi_credentials'
         );
 
         add_settings_field(
@@ -293,6 +335,32 @@ class Meta_CAPI_Settings {
             'meta-conversions-api',
             'meta_capi_tracking'
         );
+        
+        // Tracking exceptions fields.
+        add_settings_field(
+            'meta_capi_exclude_pages',
+            __('Exclude Pages from Tracking', 'meta-conversions-api'),
+            [$this, 'render_page_exceptions_field'],
+            'meta-conversions-api',
+            'meta_capi_exceptions'
+        );
+        
+        add_settings_field(
+            'meta_capi_exclude_forms',
+            __('Exclude Forms from Tracking', 'meta-conversions-api'),
+            [$this, 'render_form_exceptions_field'],
+            'meta-conversions-api',
+            'meta_capi_exceptions'
+        );
+        
+        // Error notification fields.
+        add_settings_field(
+            'meta_capi_error_notifications',
+            __('Error Notifications', 'meta-conversions-api'),
+            [$this, 'render_error_notifications_field'],
+            'meta-conversions-api',
+            'meta_capi_advanced'
+        );
 
         // Debug logging is now on Tools page
         // add_settings_field(
@@ -319,11 +387,16 @@ class Meta_CAPI_Settings {
      */
     public function enqueue_admin_scripts(string $hook): void {
         // Only load on our plugin pages
-        // Hook is 'settings_page_meta-conversions-api' since we're under Settings menu
+        // Hook is 'settings_page_meta-conversions-api' when using add_options_page
         // Also check for the page parameter for tab navigation
         $page = isset($_GET['page']) ? sanitize_key($_GET['page']) : '';
-        $is_our_page = (strpos($hook, 'meta-conversions-api') !== false) || 
-                       ($page === 'meta-conversions-api');
+        
+        // Check multiple possible hook formats
+        $is_our_page = (
+            $hook === 'settings_page_meta-conversions-api' ||
+            strpos($hook, 'meta-conversions-api') !== false ||
+            $page === 'meta-conversions-api'
+        );
         
         if (!$is_our_page) {
             return;
@@ -335,6 +408,26 @@ class Meta_CAPI_Settings {
             [],
             META_CAPI_VERSION
         );
+        
+        wp_enqueue_script(
+            'meta-capi-admin',
+            META_CAPI_PLUGIN_URL . 'assets/js/admin.js',
+            ['jquery'],
+            META_CAPI_VERSION,
+            true // Load in footer
+        );
+        
+        // Localize script with AJAX URL and data.
+        wp_localize_script('meta-capi-admin', 'metaCapiAdmin', [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('meta_capi_search'),
+            'strings' => [
+                'searchPages' => __('Search pages...', 'meta-conversions-api'),
+                'searchForms' => __('Search forms...', 'meta-conversions-api'),
+                'noResults' => __('No results found.', 'meta-conversions-api'),
+                'refresh' => __('Refresh', 'meta-conversions-api'),
+            ],
+        ]);
     }
 
     /**
@@ -540,7 +633,7 @@ class Meta_CAPI_Settings {
      */
     public function render_advanced_section(): void {
         ?>
-        <p><?php esc_html_e('Use the Test Event Code to verify events in Facebook Events Manager before going live.', 'meta-conversions-api'); ?></p>
+        <p><?php esc_html_e('Error notification settings.', 'meta-conversions-api'); ?></p>
         <?php
     }
 
@@ -829,6 +922,610 @@ class Meta_CAPI_Settings {
     }
 
     /**
+     * Render exceptions section description.
+     */
+    public function render_exceptions_section(): void {
+        ?>
+        <p><?php esc_html_e('Exclude specific pages or forms from tracking. Useful for support forms, internal pages, or test forms.', 'meta-conversions-api'); ?></p>
+        <?php
+    }
+    
+    /**
+     * Render page exceptions field.
+     */
+    public function render_page_exceptions_field(): void {
+        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
+        $excluded_pages = !empty($excluded_pages_str) ? array_filter(array_map('absint', explode(',', $excluded_pages_str))) : [];
+        
+        // Get selected page details for display.
+        $selected_pages = [];
+        if (!empty($excluded_pages)) {
+            $pages_query = get_posts([
+                'post_type' => 'page',
+                'post__in' => $excluded_pages,
+                'posts_per_page' => -1,
+                'orderby' => 'post_title',
+                'order' => 'ASC',
+            ]);
+            foreach ($pages_query as $page) {
+                $selected_pages[] = [
+                    'id' => $page->ID,
+                    'title' => $page->post_title,
+                    'url' => get_permalink($page->ID),
+                ];
+            }
+        }
+        ?>
+        <div id="meta-capi-page-selector" class="meta-capi-multiselect">
+            <input 
+                type="hidden" 
+                name="meta_capi_exclude_pages" 
+                id="meta_capi_exclude_pages_input"
+                value="<?php echo esc_attr(implode(',', $excluded_pages)); ?>"
+            >
+            <div class="meta-capi-search-box">
+                <input 
+                    type="text" 
+                    id="meta-capi-page-search" 
+                    class="meta-capi-search-input" 
+                    placeholder="<?php esc_attr_e('Search pages...', 'meta-conversions-api'); ?>"
+                    autocomplete="off"
+                >
+                <div class="meta-capi-search-results" id="meta-capi-page-results"></div>
+            </div>
+            <div class="meta-capi-selected-items" id="meta-capi-page-selected">
+                <?php foreach ($selected_pages as $page): ?>
+                    <span class="meta-capi-tag" data-id="<?php echo esc_attr($page['id']); ?>">
+                        <span class="meta-capi-tag-text"><?php echo esc_html($page['title']); ?></span>
+                        <button type="button" class="meta-capi-tag-remove" aria-label="<?php esc_attr_e('Remove', 'meta-conversions-api'); ?>">×</button>
+                    </span>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <p class="description" style="margin-top: 10px;">
+            <?php esc_html_e('PageView events will not be sent for selected pages.', 'meta-conversions-api'); ?>
+        </p>
+        <?php
+    }
+    
+    /**
+     * Render form exceptions field.
+     */
+    public function render_form_exceptions_field(): void {
+        $excluded_forms_str = get_option('meta_capi_exclude_forms', '');
+        $excluded_forms = !empty($excluded_forms_str) ? array_filter(array_map('sanitize_key', explode(',', $excluded_forms_str))) : [];
+        
+        // Get cached forms or empty array.
+        $cached_forms = get_transient('meta_capi_forms_cache');
+        $forms = is_array($cached_forms) ? $cached_forms : [];
+        $forms_loaded = !empty($forms);
+        $last_loaded = get_transient('meta_capi_forms_cache_time');
+        
+        // Get selected form details for display (from cache if available, or minimal info).
+        $selected_forms = [];
+        foreach ($excluded_forms as $form_id) {
+            if (isset($forms[$form_id])) {
+                // Form found in cache - use full details.
+                $selected_forms[] = [
+                    'id' => $form_id,
+                    'name' => $forms[$form_id]['name'],
+                    'location' => $forms[$form_id]['location'] ?? '',
+                ];
+            } elseif (!empty($form_id)) {
+                // Form not in cache but we have saved IDs - show minimal info.
+                // This ensures saved forms are displayed even if cache is empty.
+                $selected_forms[] = [
+                    'id' => $form_id,
+                    'name' => sprintf(__('Form ID: %s', 'meta-conversions-api'), $form_id),
+                    'location' => '',
+                ];
+            }
+        }
+        ?>
+        <?php if (!did_action('elementor_pro/init')): ?>
+            <p class="description" style="color: #646970;">
+                <?php esc_html_e('Elementor Pro is not active. No forms available.', 'meta-conversions-api'); ?>
+            </p>
+        <?php else: ?>
+            <div id="meta-capi-form-selector" class="meta-capi-multiselect">
+                <input 
+                    type="hidden" 
+                    name="meta_capi_exclude_forms" 
+                    id="meta_capi_exclude_forms_input"
+                    value="<?php echo esc_attr(implode(',', $excluded_forms)); ?>"
+                >
+                
+                <?php if (!$forms_loaded): ?>
+                    <div class="meta-capi-load-forms-section">
+                        <button type="button" id="meta-capi-load-forms-btn" class="button button-secondary">
+                            <span class="dashicons dashicons-update" style="vertical-align: middle; margin-right: 5px;"></span>
+                            <?php esc_html_e('Load Forms', 'meta-conversions-api'); ?>
+                        </button>
+                        <span class="spinner" id="meta-capi-forms-spinner" style="float: none; margin-left: 10px; visibility: hidden;"></span>
+                        <p class="description" style="margin-top: 10px;">
+                            <?php esc_html_e('Click to scan your site for Elementor forms. This may take a moment on large sites.', 'meta-conversions-api'); ?>
+                        </p>
+                    </div>
+                <?php else: ?>
+                    <div class="meta-capi-forms-loaded-info">
+                        <p style="margin: 0 0 10px 0;">
+                            <span class="dashicons dashicons-yes-alt" style="color: #00a32a; vertical-align: middle;"></span>
+                            <?php
+                            printf(
+                                /* translators: %d: number of forms, %s: time ago */
+                                esc_html__('%d forms loaded', 'meta-conversions-api'),
+                                count($forms)
+                            );
+                            ?>
+                            <?php if ($last_loaded): ?>
+                                <span class="description" style="margin-left: 8px;">
+                                    <?php
+                                    printf(
+                                        /* translators: %s: human-readable time */
+                                        esc_html__('(loaded %s ago)', 'meta-conversions-api'),
+                                        human_time_diff($last_loaded, current_time('timestamp'))
+                                    );
+                                    ?>
+                                </span>
+                            <?php endif; ?>
+                            <button type="button" id="meta-capi-refresh-forms-btn" class="button button-small" style="margin-left: 10px;">
+                                <span class="dashicons dashicons-update" style="vertical-align: middle; font-size: 16px;"></span>
+                                <?php esc_html_e('Refresh', 'meta-conversions-api'); ?>
+                            </button>
+                            <span class="spinner" id="meta-capi-forms-spinner" style="float: none; margin-left: 10px; visibility: hidden;"></span>
+                        </p>
+                    </div>
+                <?php endif; ?>
+                
+                <div class="meta-capi-search-box" <?php echo $forms_loaded ? '' : 'style="display: none;"'; ?>>
+                    <input 
+                        type="text" 
+                        id="meta-capi-form-search" 
+                        class="meta-capi-search-input" 
+                        placeholder="<?php esc_attr_e('Search forms...', 'meta-conversions-api'); ?>"
+                        autocomplete="off"
+                        <?php echo $forms_loaded ? '' : 'disabled'; ?>
+                    >
+                    <div class="meta-capi-search-results" id="meta-capi-form-results"></div>
+                </div>
+                
+                <?php if (!empty($selected_forms) || $forms_loaded): ?>
+                <div class="meta-capi-selected-items" id="meta-capi-form-selected">
+                    <?php foreach ($selected_forms as $form): ?>
+                        <span class="meta-capi-tag" data-id="<?php echo esc_attr($form['id']); ?>">
+                            <span class="meta-capi-tag-text"><?php echo esc_html($form['name']); ?></span>
+                            <button type="button" class="meta-capi-tag-remove" aria-label="<?php esc_attr_e('Remove', 'meta-conversions-api'); ?>">×</button>
+                        </span>
+                    <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+        <p class="description" style="margin-top: 10px;">
+            <?php esc_html_e('Lead events will not be sent for selected forms.', 'meta-conversions-api'); ?>
+        </p>
+        <?php
+    }
+    
+    /**
+     * Get all Elementor Pro forms.
+     *
+     * @return array Array of form_id => ['name' => string, 'location' => string]
+     */
+    private function get_elementor_forms(): array {
+        $forms = [];
+        
+        if (!did_action('elementor_pro/init')) {
+            return $forms;
+        }
+        
+        // Query all posts/pages with Elementor data.
+        $query = new WP_Query([
+            'post_type' => 'any',
+            'posts_per_page' => -1,
+            'post_status' => 'publish',
+            'meta_query' => [
+                [
+                    'key' => '_elementor_data',
+                    'compare' => 'EXISTS',
+                ],
+            ],
+        ]);
+        
+        if (!$query->have_posts()) {
+            return $forms;
+        }
+        
+        foreach ($query->posts as $post) {
+            $elementor_data = get_post_meta($post->ID, '_elementor_data', true);
+            
+            if (empty($elementor_data)) {
+                continue;
+            }
+            
+            // Decode JSON if it's a string.
+            if (is_string($elementor_data)) {
+                $elementor_data = json_decode($elementor_data, true);
+            }
+            
+            if (!is_array($elementor_data)) {
+                continue;
+            }
+            
+            // Recursively find form widgets.
+            $this->extract_forms_from_elementor_data($elementor_data, $forms, $post);
+        }
+        
+        wp_reset_postdata();
+        
+        return $forms;
+    }
+    
+    /**
+     * Recursively extract forms from Elementor data.
+     *
+     * @param array $elements Elementor elements.
+     * @param array $forms Forms array (passed by reference).
+     * @param WP_Post $post Post object.
+     */
+    private function extract_forms_from_elementor_data(array $elements, array &$forms, WP_Post $post): void {
+        foreach ($elements as $element) {
+            // Check if this is a form widget.
+            if (isset($element['widgetType']) && $element['widgetType'] === 'form') {
+                // Get form name (this is what Elementor uses as the form identifier).
+                $form_name = $element['settings']['form_name'] ?? '';
+                $element_id = $element['id'] ?? '';
+                
+                // If form_name is empty, use element ID or generate one.
+                if (empty($form_name)) {
+                    $form_name = !empty($element_id) ? __('Untitled Form', 'meta-conversions-api') . ' (' . $element_id . ')' : __('Untitled Form', 'meta-conversions-api');
+                    $form_id = !empty($element_id) ? 'element_' . $element_id : 'form_' . uniqid();
+                } else {
+                    // Use form_name as primary ID (this is what Elementor returns in get_form_settings('id')).
+                    $form_id = $form_name;
+                }
+                
+                // Use form_id as key (this matches what we check in tracking).
+                // Append post ID if duplicate to make it unique.
+                $key = $form_id;
+                $counter = 1;
+                $original_key = $key;
+                while (isset($forms[$key])) {
+                    // Check if this is the same form on a different page.
+                    if ($forms[$key]['location'] === $post->post_title . ' (ID: ' . $post->ID . ')') {
+                        break; // Same form, same page - skip duplicate
+                    }
+                    $key = $original_key . '_' . $counter;
+                    $counter++;
+                }
+                
+                $forms[$key] = [
+                    'name' => $form_name,
+                    'id' => $form_id,
+                    'element_id' => $element_id,
+                    'location' => $post->post_title . ' (ID: ' . $post->ID . ')',
+                ];
+            }
+            
+            // Recurse into elements.
+            if (!empty($element['elements']) && is_array($element['elements'])) {
+                $this->extract_forms_from_elementor_data($element['elements'], $forms, $post);
+            }
+        }
+    }
+    
+    /**
+     * Sanitize page IDs (from comma-separated string).
+     *
+     * @param string|mixed $value Page IDs as comma-separated string.
+     * @return string Sanitized comma-separated page IDs.
+     */
+    public function sanitize_page_ids_string($value): string {
+        if (empty($value)) {
+            return '';
+        }
+        
+        if (is_array($value)) {
+            // Handle array input (legacy support).
+            $value = implode(',', $value);
+        }
+        
+        $ids = array_filter(array_map('absint', explode(',', $value)));
+        return implode(',', $ids);
+    }
+    
+    /**
+     * Sanitize form IDs (from comma-separated string).
+     *
+     * @param string|mixed $value Form IDs as comma-separated string.
+     * @return string Sanitized comma-separated form IDs.
+     */
+    public function sanitize_form_ids_string($value): string {
+        if (empty($value)) {
+            return '';
+        }
+        
+        if (is_array($value)) {
+            // Handle array input (legacy support).
+            $value = implode(',', $value);
+        }
+        
+        $ids = array_filter(array_map('sanitize_key', explode(',', $value)));
+        return implode(',', $ids);
+    }
+    
+    /**
+     * AJAX handler for searching pages.
+     */
+    public function ajax_search_pages(): void {
+        check_ajax_referer('meta_capi_search', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meta-conversions-api')]);
+        }
+        
+        $search = isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '';
+        $excluded = isset($_POST['excluded']) ? array_filter(array_map('absint', explode(',', sanitize_text_field(wp_unslash($_POST['excluded']))))) : [];
+        
+        $args = [
+            'post_type' => 'page',
+            'posts_per_page' => 20,
+            'orderby' => 'post_title',
+            'order' => 'ASC',
+            'post_status' => 'publish',
+        ];
+        
+        if (!empty($search)) {
+            $args['s'] = $search;
+        }
+        
+        $query = new WP_Query($args);
+        $results = [];
+        
+        foreach ($query->posts as $page) {
+            // Skip already selected pages.
+            if (in_array($page->ID, $excluded, true)) {
+                continue;
+            }
+            
+            $results[] = [
+                'id' => $page->ID,
+                'title' => $page->post_title,
+                'url' => get_permalink($page->ID),
+            ];
+        }
+        
+        wp_send_json_success(['results' => $results]);
+    }
+    
+    /**
+     * AJAX handler for searching forms.
+     */
+    public function ajax_search_forms(): void {
+        check_ajax_referer('meta_capi_search', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meta-conversions-api')]);
+        }
+        
+        $search = isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '';
+        $excluded = isset($_POST['excluded']) ? array_filter(array_map('sanitize_key', explode(',', sanitize_text_field(wp_unslash($_POST['excluded']))))) : [];
+        
+        // Get cached forms.
+        $all_forms = get_transient('meta_capi_forms_cache');
+        
+        if (!is_array($all_forms) || empty($all_forms)) {
+            wp_send_json_success(['results' => [], 'message' => __('Forms not loaded. Please click "Load Forms" first.', 'meta-conversions-api')]);
+        }
+        
+        $results = [];
+        
+        foreach ($all_forms as $form_id => $form_data) {
+            // Skip already selected forms.
+            if (in_array($form_id, $excluded, true)) {
+                continue;
+            }
+            
+            // Filter by search term.
+            if (!empty($search)) {
+                $search_lower = strtolower($search);
+                $name_lower = strtolower($form_data['name']);
+                $location_lower = strtolower($form_data['location'] ?? '');
+                
+                if (strpos($name_lower, $search_lower) === false && strpos($location_lower, $search_lower) === false) {
+                    continue;
+                }
+            }
+            
+            $results[] = [
+                'id' => $form_id,
+                'name' => $form_data['name'],
+                'location' => $form_data['location'] ?? '',
+            ];
+            
+            // Limit results.
+            if (count($results) >= 20) {
+                break;
+            }
+        }
+        
+        wp_send_json_success(['results' => $results]);
+    }
+    
+    /**
+     * AJAX handler for loading/refreshing forms.
+     */
+    public function ajax_load_forms(): void {
+        check_ajax_referer('meta_capi_search', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meta-conversions-api')]);
+        }
+        
+        if (!did_action('elementor_pro/init')) {
+            wp_send_json_error(['message' => __('Elementor Pro is not active.', 'meta-conversions-api')]);
+        }
+        
+        // Load forms (this may take a moment on large sites).
+        $forms = $this->get_elementor_forms();
+        
+        // Cache forms for 1 hour.
+        set_transient('meta_capi_forms_cache', $forms, HOUR_IN_SECONDS);
+        set_transient('meta_capi_forms_cache_time', current_time('timestamp'), HOUR_IN_SECONDS);
+        
+        // Format for JavaScript.
+        $formatted_forms = [];
+        foreach ($forms as $form_id => $form_data) {
+            $formatted_forms[] = [
+                'id' => $form_id,
+                'name' => $form_data['name'],
+                'location' => $form_data['location'] ?? '',
+            ];
+        }
+        
+        wp_send_json_success([
+            'forms' => $formatted_forms,
+            'count' => count($forms),
+        ]);
+    }
+    
+    /**
+     * Render error notifications field.
+     */
+    public function render_error_notifications_field(): void {
+        $enabled = get_option('meta_capi_enable_error_notifications', true);
+        $email = get_option('meta_capi_notification_email', '');
+        $threshold = get_option('meta_capi_notification_threshold', 5);
+        $admin_email = get_option('admin_email');
+        
+        // Default to admin email if not set.
+        if (empty($email)) {
+            $email = $admin_email;
+        }
+        ?>
+        <div id="error-notifications">
+        <table class="form-table" role="presentation">
+            <tr>
+                <th scope="row">
+                    <label for="meta_capi_enable_error_notifications">
+                        <?php esc_html_e('Enable Email Notifications', 'meta-conversions-api'); ?>
+                    </label>
+                </th>
+                <td>
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="meta_capi_enable_error_notifications"
+                            id="meta_capi_enable_error_notifications"
+                            value="1"
+                            <?php checked($enabled, true); ?>
+                        >
+                        <?php esc_html_e('Send email notifications when API connection issues are detected', 'meta-conversions-api'); ?>
+                    </label>
+                    <p class="description">
+                        <?php esc_html_e('You will receive an email when multiple API failures occur within a short time period.', 'meta-conversions-api'); ?>
+                    </p>
+                </td>
+            </tr>
+            <tr id="meta-capi-notification-settings-row" style="<?php echo $enabled ? '' : 'display: none;'; ?>">
+                <th scope="row">
+                    <label for="meta_capi_notification_email">
+                        <?php esc_html_e('Notification Email', 'meta-conversions-api'); ?>
+                    </label>
+                </th>
+                <td>
+                    <input
+                        type="email"
+                        name="meta_capi_notification_email"
+                        id="meta_capi_notification_email"
+                        value="<?php echo esc_attr($email); ?>"
+                        class="regular-text"
+                        placeholder="<?php echo esc_attr($admin_email); ?>"
+                    >
+                    <p class="description">
+                        <?php
+                        printf(
+                            /* translators: %s: admin email */
+                            esc_html__('Email address to receive notifications. Defaults to site admin email (%s) if empty.', 'meta-conversions-api'),
+                            esc_html($admin_email)
+                        );
+                        ?>
+                    </p>
+                </td>
+            </tr>
+            <tr id="meta-capi-threshold-row" style="<?php echo $enabled ? '' : 'display: none;'; ?>">
+                <th scope="row">
+                    <label for="meta_capi_notification_threshold">
+                        <?php esc_html_e('Notification Threshold', 'meta-conversions-api'); ?>
+                    </label>
+                </th>
+                <td>
+                    <input
+                        type="number"
+                        name="meta_capi_notification_threshold"
+                        id="meta_capi_notification_threshold"
+                        value="<?php echo esc_attr($threshold); ?>"
+                        min="1"
+                        max="50"
+                        class="small-text"
+                    >
+                    <p class="description">
+                        <?php esc_html_e('Number of failures in 1 hour before sending a notification. Default: 5. (Useful for testing: set to 2-3)', 'meta-conversions-api'); ?>
+                    </p>
+                </td>
+            </tr>
+        </table>
+        <script>
+        (function($) {
+            $('#meta_capi_enable_error_notifications').on('change', function() {
+                if ($(this).is(':checked')) {
+                    $('#meta-capi-notification-settings-row, #meta-capi-threshold-row').show();
+                } else {
+                    $('#meta-capi-notification-settings-row, #meta-capi-threshold-row').hide();
+                }
+            });
+        })(jQuery);
+        </script>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Sanitize email address.
+     *
+     * @param string|mixed $value Email address.
+     * @return string Sanitized email or empty string.
+     */
+    public function sanitize_email($value): string {
+        if (empty($value)) {
+            return '';
+        }
+        
+        $email = sanitize_email($value);
+        return is_email($email) ? $email : '';
+    }
+    
+    /**
+     * Sanitize notification threshold.
+     *
+     * @param int|mixed $value Threshold value.
+     * @return int Sanitized threshold (1-50).
+     */
+    public function sanitize_threshold($value): int {
+        $threshold = absint($value);
+        
+        // Ensure between 1 and 50.
+        if ($threshold < 1) {
+            return 1;
+        }
+        if ($threshold > 50) {
+            return 50;
+        }
+        
+        return $threshold;
+    }
+
+    /**
      * Render analytics opt-out field.
      */
     public function render_analytics_opt_out_field(): void {
@@ -929,7 +1626,7 @@ class Meta_CAPI_Settings {
         if (get_option('meta_capi_enable_logging')) {
             echo '<div class="notice notice-warning is-dismissible">';
             echo '<p>';
-            echo '<strong>' . esc_html__('Meta CAPI Debug Logging Active', 'meta-conversions-api') . '</strong><br>';
+            echo '<strong>' . esc_html__('Meta Pixel & CAPI Debug Logging Active', 'meta-conversions-api') . '</strong><br>';
             echo esc_html__('Debug logging is currently enabled. This will log all events and API requests. Remember to disable it once you\'re done troubleshooting.', 'meta-conversions-api') . ' ';
             echo '<a href="' . esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#debug-logging')) . '">';
             echo esc_html__('Disable in Tools & Logs', 'meta-conversions-api');
@@ -1084,7 +1781,7 @@ class Meta_CAPI_Settings {
                     <li>
                         <strong><?php esc_html_e('Configure Plugin Settings', 'meta-conversions-api'); ?></strong>
                         <ul style="list-style: disc; margin-left: 20px;">
-                            <li><?php esc_html_e('Go to', 'meta-conversions-api'); ?> <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>"><?php esc_html_e('Settings → Meta CAPI', 'meta-conversions-api'); ?></a></li>
+                            <li><?php esc_html_e('Go to', 'meta-conversions-api'); ?> <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>"><?php esc_html_e('Settings → Meta Pixel & CAPI', 'meta-conversions-api'); ?></a></li>
                             <li><?php esc_html_e('Enter your Dataset ID and Access Token', 'meta-conversions-api'); ?></li>
                             <li><?php esc_html_e('Enable the tracking features you want', 'meta-conversions-api'); ?></li>
                             <li><?php esc_html_e('Save Settings', 'meta-conversions-api'); ?></li>
@@ -1191,7 +1888,7 @@ class Meta_CAPI_Settings {
                     <li>
                         <?php esc_html_e('Go to', 'meta-conversions-api'); ?>
                         <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#tracking-settings')); ?>">
-                            <?php esc_html_e('Settings → Meta CAPI → Tracking Settings', 'meta-conversions-api'); ?>
+                            <?php esc_html_e('Settings → Meta Pixel & CAPI → Tracking Settings', 'meta-conversions-api'); ?>
                         </a>
                     </li>
                     <li>
@@ -1409,10 +2106,44 @@ class Meta_CAPI_Settings {
                     <li><a href="https://business.facebook.com/events_manager2" target="_blank"><?php esc_html_e('Facebook Events Manager', 'meta-conversions-api'); ?></a></li>
                     <li><a href="https://developers.facebook.com/docs/marketing-api/conversions-api" target="_blank"><?php esc_html_e('Facebook Conversions API Documentation', 'meta-conversions-api'); ?></a></li>
                     <li><a href="https://developers.facebook.com/docs/meta-pixel" target="_blank"><?php esc_html_e('Meta Pixel Documentation', 'meta-conversions-api'); ?></a></li>
-                    <li><a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>"><?php esc_html_e('Plugin Settings', 'meta-conversions-api'); ?></a></li>
-                    <li><a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=setup')); ?>"><?php esc_html_e('Setup Guide', 'meta-conversions-api'); ?></a></li>
-                    <li><a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools')); ?>"><?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?></a></li>
                 </ul>
+                
+                <h3 id="error-notifications" style="margin-top: 30px;"><?php esc_html_e('Error Email Notifications', 'meta-conversions-api'); ?></h3>
+                <p>
+                    <?php esc_html_e('The plugin can automatically send email notifications when API connection issues are detected.', 'meta-conversions-api'); ?>
+                </p>
+                <ul style="list-style: disc; margin-left: 20px; line-height: 1.8;">
+                    <li>
+                        <strong><?php esc_html_e('Enable Email Notifications', 'meta-conversions-api'); ?></strong>:
+                        <?php esc_html_e('Toggle email notifications on/off. Enabled by default.', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <strong><?php esc_html_e('Notification Email', 'meta-conversions-api'); ?></strong>:
+                        <?php esc_html_e('Email address to receive notifications. Defaults to site admin email if empty. Useful for sending notifications to marketers or webmasters managing the plugin.', 'meta-conversions-api'); ?>
+                    </li>
+                    <li>
+                        <strong><?php esc_html_e('Notification Threshold', 'meta-conversions-api'); ?></strong>:
+                        <?php esc_html_e('Number of failures in 1 hour before sending a notification. Default: 5. Lower this value (2-3) for testing purposes. Maximum: 50.', 'meta-conversions-api'); ?>
+                    </li>
+                </ul>
+                <p>
+                    <?php esc_html_e('Notification emails include:', 'meta-conversions-api'); ?>
+                </p>
+                <ul style="list-style: disc; margin-left: 20px; line-height: 1.8;">
+                    <li><?php esc_html_e('Summary of failed event types', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Recent error messages with response codes', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Troubleshooting steps and links to documentation', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Links to plugin settings and Facebook documentation', 'meta-conversions-api'); ?></li>
+                </ul>
+                <p>
+                    <?php esc_html_e('Notifications are sent a maximum of once per 24 hours to prevent email spam.', 'meta-conversions-api'); ?>
+                </p>
+                
+                <p>
+                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api#error-notifications')); ?>" class="button">
+                        <?php esc_html_e('Configure Error Notifications', 'meta-conversions-api'); ?>
+                    </a>
+                </p>
             </div>
 
                 </div>
