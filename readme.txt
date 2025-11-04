@@ -1,28 +1,34 @@
-=== Meta Conversions API ===
+=== Meta Pixel & Conversions API ===
 Contributors: wpbooster
-Tags: facebook, conversions api, meta, elementor, tracking
+Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, ecommerce
 Requires at least: 6.0
-Tested up to: 6.4
+Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 1.0.0
+Stable tag: 2.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Connect your WordPress site to Facebook Conversions API to track page views and Elementor Pro form submissions.
+Complete Meta tracking solution with Pixel (browser-side) and Conversions API (server-side) for accurate event tracking. Supports page views, Elementor Pro forms, and WooCommerce with automatic event deduplication.
 
 == Description ==
 
-Meta Conversions API for WordPress enables server-side event tracking to Facebook (Meta) without relying solely on browser-based pixels. This improves tracking accuracy and helps you measure campaign performance more reliably.
+Meta Pixel & Conversions API for WordPress provides a complete tracking solution combining browser-side Pixel tracking with server-side Conversions API for maximum accuracy and reliability. This dual-tracking approach ensures events are captured even when browser cookies are blocked, improving campaign measurement and attribution.
 
 = Features =
 
-* **Page View Tracking** - Automatically sends PageView events to Facebook
-* **Elementor Pro Integration** - Tracks form submissions as Lead events
+* **Dual Tracking** - Meta Pixel (browser-side) + Conversions API (server-side) for maximum accuracy
+* **WooCommerce Integration** - Full event tracking for ViewContent, AddToCart, InitiateCheckout, and Purchase
+* **Purchase Event Timing** - Choose when Purchase events fire: "When order is placed" or "When payment is confirmed"
+* **Page View Tracking** - Automatically sends PageView events via both Pixel and CAPI
+* **Elementor Pro Integration** - Tracks form submissions as Lead events with automatic deduplication
+* **Event Deduplication** - Automatically prevents duplicate events between Pixel and CAPI
+* **Tracking Exceptions** - Exclude specific pages or forms from tracking
 * **Privacy-Compliant** - Properly hashes PII data according to Facebook requirements
-* **Event Deduplication** - Generates unique event IDs to prevent duplicate events
-* **Debug Logging** - Built-in log viewer with automatic cleanup
+* **Auto-Config Control** - Disable Facebook's automatic event tracking for cleaner data
+* **Debug Logging** - Built-in log viewer with automatic cleanup (10MB cap, 30-day retention)
 * **Test Mode** - Support for Facebook Test Event Code
 * **System Status** - Dashboard showing configuration and compatibility
+* **Automatic Updates** - Weekly checks for updates from GitHub releases
 
 = Requirements =
 
@@ -31,6 +37,7 @@ Meta Conversions API for WordPress enables server-side event tracking to Faceboo
 * Facebook Dataset ID (Pixel ID)
 * Facebook Conversions API Access Token
 * Elementor Pro (optional, for form tracking)
+* WooCommerce (optional, for eCommerce tracking)
 
 = Privacy & Data Handling =
 
@@ -43,11 +50,12 @@ The plugin follows Facebook's best practices:
 
 == Installation ==
 
-1. Upload the plugin files to `/wp-content/plugins/meta-conversions-api`
-2. Activate the plugin through the 'Plugins' menu
-3. Go to Settings → Meta CAPI
-4. Enter your Facebook Dataset ID and Access Token
-5. Configure tracking settings
+1. Download the latest release from GitHub Releases
+2. Upload the ZIP file via WordPress Admin → Plugins → Add New → Upload Plugin
+3. Activate the plugin through the 'Plugins' menu in WordPress
+4. Go to Settings → Meta CAPI
+5. Enter your Facebook Dataset ID and Access Token
+6. Configure tracking settings
 
 == Frequently Asked Questions ==
 
@@ -68,34 +76,98 @@ The plugin follows Facebook's best practices:
 
 = Do I need the Facebook Pixel JavaScript code? =
 
-The Conversions API works independently, but using both the pixel and CAPI together provides the most accurate tracking and enables event deduplication.
+The plugin automatically injects the Meta Pixel code for browser-side tracking. Using both the pixel and CAPI together provides the most accurate tracking and enables event deduplication.
 
 = Will this slow down my site? =
 
-No. Events are sent server-side after the page loads, so there's no impact on page load times.
+No. Events are sent server-side after the page loads, and browser-side events are non-blocking, so there's no impact on page load times.
+
+= How do automatic updates work? =
+
+The plugin checks for updates from GitHub releases weekly. When a new version is available, you'll see an update notification in your WordPress admin dashboard. Click "Update" to install automatically.
 
 == Screenshots ==
 
-1. Settings page with Facebook credentials
-2. System status dashboard
-3. Built-in log viewer
-4. Documentation tab with setup guide
+1. Settings page with Facebook credentials and tracking options
+2. WooCommerce event tracking configuration
+3. Page and form exclusion settings
+4. System status dashboard
+5. Built-in log viewer
+6. Documentation tab with setup guide
 
 == Changelog ==
 
+= 2.0.1 =
+
+* Fixed duplicate Lead events from Elementor forms (browser-side deduplication)
+* Fixed form exclusion not working in browser-side tracking
+* Fixed page exclusions not working consistently
+* Fixed Purchase event timing - When set to "payment confirmed", browser-side Purchase events are now properly skipped on thank-you page
+* Improved Elementor form tracking architecture (simplified browser-side logic)
+* Cleaned up debug logging from production code
+* Simplified browser-side form tracking to rely on server-side exclusion logic
+
+= 2.0.0 =
+
+* Added Meta Pixel integration with automatic injection (can be disabled)
+* Added full WooCommerce support (ViewContent, AddToCart, InitiateCheckout, Purchase)
+* Added Purchase event timing options (order placed vs payment confirmed)
+* Added page exclusions with searchable multi-select interface
+* Added form exclusions with searchable multi-select interface
+* Added auto-cleanup of deleted forms/pages from exclusion lists
+* Added enhanced documentation split into Setup Guide and Troubleshooting tabs
+* Improved system status with WooCommerce and Pixel detection
+* Improved browser and server-side tracking coordination
+* Fixed add to cart 500 error (event ID generation)
+* Fixed purchase event hook reliability
+* Fixed WooCommerce event defaults not enabling on first activation
+* Changed plugin name to "Meta Pixel & Conversions API" to reflect dual tracking capabilities
+* Changed PHP requirement to 8.0+ for better type safety and performance
+
+= 1.0.5 =
+
+* Fixed plugin deactivation after automatic update
+* Post-update folder handling now uses actual plugin directory name
+
+= 1.0.4 =
+
+* Minor improvements and testing automatic update functionality
+
+= 1.0.3 =
+
+* Fixed automatic updates not displaying
+* Updater now uses plugin_basename() to dynamically detect actual plugin path
+
+= 1.0.2 =
+
+* Added automatic updates from GitHub releases
+* Added anonymous usage analytics (opt-out available)
+* Added admin email notifications for API failures
+* Enhanced documentation with GitHub release links
+
 = 1.0.0 =
+
 * Initial release
-* Page view tracking
-* Elementor Pro form submission tracking
-* Admin settings with tabbed navigation
+* Page view tracking via Facebook Conversions API
+* Elementor Pro form submission tracking (Lead events)
+* Admin settings page with tabbed navigation
 * Debug logging with automatic management
 * System status dashboard
 * Test event functionality
 
 == Upgrade Notice ==
 
+= 2.0.1 =
+
+Bug fix release - Fixes critical tracking issues including duplicate Lead events, form/page exclusions, and Purchase event timing. Recommended for all users.
+
+= 2.0.0 =
+
+Major update - Added full WooCommerce support, Meta Pixel integration, and tracking exceptions. PHP 8.0+ required.
+
 = 1.0.0 =
-Initial release of Meta Conversions API plugin.
+
+Initial release of Meta Pixel & Conversions API plugin.
 
 == Support ==
 
@@ -104,4 +176,3 @@ For support, please visit https://wpbooster.cloud
 == Credits ==
 
 Developed by WP Booster
-
