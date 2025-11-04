@@ -2,6 +2,19 @@
 
 All notable changes to Meta Pixel & Conversions API will be documented in this file.
 
+## [2.0.1] - 2025-10-31
+
+### Fixed
+- Fixed duplicate Lead events from Elementor forms (browser-side deduplication)
+- Fixed form exclusion not working in browser-side tracking
+- Fixed page exclusions not working consistently
+- Fixed Purchase event timing "payment confirmed" sending browser-side events on thank-you page
+- Improved Elementor form tracking architecture (simplified browser-side logic)
+
+### Improved
+- Cleaned up debug logging from production code
+- Simplified browser-side form tracking to rely on server-side exclusion logic
+
 ## [2.0.0] - 2025-10-31
 
 ### Added

@@ -3,7 +3,7 @@
  * Plugin Name: Meta Pixel & Conversions API
  * Plugin URI: https://wpbooster.cloud/meta-pixel-conversions-api
  * Description: Complete Meta tracking solution with Pixel (browser) and Conversions API (server). Supports page views, Elementor Pro forms, and WooCommerce events with automatic deduplication.
- * Version: 2.0.0
+ * Version: 2.0.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Author: WP Booster
@@ -22,7 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants.
-define('META_CAPI_VERSION', '2.0.0');
+define('META_CAPI_VERSION', '2.0.1');
 define('META_CAPI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('META_CAPI_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('META_CAPI_PLUGIN_FILE', __FILE__);
