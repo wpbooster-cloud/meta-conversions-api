@@ -165,15 +165,15 @@ class Meta_CAPI {
         // Initialize automatic updates.
         new Meta_CAPI_Updater();
 
-        // Initialize tracking (page views, etc.).
-        $this->tracking = new Meta_CAPI_Tracking($this->client, $this->logger);
+        // Initialize Phase 1 classes (Pixel & Coordinator) FIRST - needed by other classes.
+        $this->coordinator = new Meta_CAPI_Coordinator($this->logger);
+        $this->pixel = new Meta_CAPI_Pixel($this->logger);
+
+        // Initialize tracking (page views, etc.) - requires coordinator.
+        $this->tracking = new Meta_CAPI_Tracking($this->client, $this->logger, $this->coordinator);
 
         // Initialize Elementor integration.
         $this->elementor = new Meta_CAPI_Elementor($this->client, $this->logger);
-
-        // Initialize Phase 1 classes (Pixel & Coordinator).
-        $this->coordinator = new Meta_CAPI_Coordinator($this->logger);
-        $this->pixel = new Meta_CAPI_Pixel($this->logger);
 
         // Initialize Phase 1.5 classes (Performance & Diagnostics).
         $this->system_status = new Meta_CAPI_System_Status($this->logger);
@@ -201,6 +201,9 @@ class Meta_CAPI {
         // Manual stats trigger via secret URL parameter (for testing).
         add_action('admin_init', [$this, 'maybe_send_stats_manually']);
 
+        // Redirect to settings page after activation.
+        add_action('admin_init', [$this, 'redirect_after_activation']);
+
         // Activation/Deactivation hooks.
         register_activation_hook(META_CAPI_PLUGIN_FILE, [$this, 'activate']);
         register_deactivation_hook(META_CAPI_PLUGIN_FILE, [$this, 'deactivate']);
@@ -213,7 +216,7 @@ class Meta_CAPI {
     public function init_woocommerce(): void {
         // Only initialize if WooCommerce is active and tracking is enabled.
         if (class_exists('WooCommerce') && get_option('meta_capi_enable_woocommerce', false)) {
-            $this->woocommerce = new Meta_CAPI_WooCommerce($this->client, $this->logger);
+            $this->woocommerce = new Meta_CAPI_WooCommerce($this->client, $this->logger, $this->coordinator);
             $this->logger->log('WooCommerce integration initialized', 'info');
         }
     }
@@ -260,10 +263,20 @@ class Meta_CAPI {
         }
         
         // Check if credentials are configured.
-        $pixel_id = get_option('meta_capi_pixel_id');
-        $access_token = get_option('meta_capi_access_token');
+        // Trim whitespace to handle cases where users might have entered only spaces.
+        $pixel_id = trim((string) get_option('meta_capi_pixel_id', ''));
+        $access_token = trim((string) get_option('meta_capi_access_token', ''));
+        $is_configured = !empty($pixel_id) && !empty($access_token);
 
-        if (empty($pixel_id) || empty($access_token)) {
+        // Don't show the notice on the settings page itself (user is already configuring).
+        $is_settings_page = strpos($screen->id, 'meta-conversions-api') !== false;
+        
+        // Don't show if settings were just saved (check for settings-updated parameter).
+        // WordPress passes '1' (numeric string) when settings are saved, not 'true'.
+        $settings_just_saved = isset($_GET['settings-updated']) && $_GET['settings-updated'] === '1';
+
+        // Show setup notice only if not configured, not on settings page, and settings weren't just saved.
+        if (!$is_configured && !$is_settings_page && !$settings_just_saved) {
             ?>
             <div class="notice notice-warning is-dismissible">
                 <p>
@@ -279,7 +292,10 @@ class Meta_CAPI {
                 </p>
             </div>
             <?php
-            return; // Don't show other notices if not configured.
+            // Don't show other notices if not configured (unless on settings page).
+            if (!$is_settings_page) {
+                return;
+            }
         }
 
         // Show system status warnings (only on plugin pages).
@@ -312,17 +328,35 @@ class Meta_CAPI {
      * Plugin activation.
      */
     public function activate(): void {
-        // Set default options.
-        add_option('meta_capi_pixel_id', '');
-        add_option('meta_capi_access_token', '');
-        add_option('meta_capi_test_event_code', '');
-        add_option('meta_capi_enable_pixel', '1');
-        add_option('meta_capi_enable_page_view', '1');
-        add_option('meta_capi_enable_form_tracking', '1');
-        add_option('meta_capi_enable_logging', '0');
+        // Set default options ONLY if they don't already exist.
+        // add_option() only adds if option doesn't exist, but we explicitly check to be extra safe.
+        // This prevents any possibility of overwriting existing settings during re-activation.
+        if (false === get_option('meta_capi_pixel_id', false)) {
+            add_option('meta_capi_pixel_id', '');
+        }
+        if (false === get_option('meta_capi_access_token', false)) {
+            add_option('meta_capi_access_token', '');
+        }
+        if (false === get_option('meta_capi_test_event_code', false)) {
+            add_option('meta_capi_test_event_code', '');
+        }
+        if (false === get_option('meta_capi_enable_pixel', false)) {
+            add_option('meta_capi_enable_pixel', '1');
+        }
+        if (false === get_option('meta_capi_enable_page_view', false)) {
+            add_option('meta_capi_enable_page_view', '1');
+        }
+        if (false === get_option('meta_capi_enable_form_tracking', false)) {
+            add_option('meta_capi_enable_form_tracking', '1');
+        }
+        if (false === get_option('meta_capi_enable_logging', false)) {
+            add_option('meta_capi_enable_logging', '0');
+        }
         
         // Analytics opt-in by default (can be disabled in settings).
-        add_option('meta_capi_disable_stats', '0');
+        if (false === get_option('meta_capi_disable_stats', false)) {
+            add_option('meta_capi_disable_stats', '0');
+        }
         
         // Set flag to show analytics notice.
         set_transient('meta_capi_show_analytics_notice', true, DAY_IN_SECONDS);
@@ -339,6 +373,9 @@ class Meta_CAPI {
 
         // Flush rewrite rules.
         flush_rewrite_rules();
+
+        // Set flag to redirect to settings page after activation.
+        set_transient('meta_capi_redirect_after_activation', true, 30);
     }
 
     /**
@@ -366,6 +403,184 @@ class Meta_CAPI {
      */
     public function cleanup_old_logs(): void {
         $this->logger->clear_old_logs(30); // Keep logs for 30 days.
+    }
+
+    /**
+     * Redirect to settings page after plugin activation.
+     */
+    public function redirect_after_activation(): void {
+        // Only redirect if flag is set and user has permissions.
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        // Check if we should redirect (set during activation).
+        if (get_transient('meta_capi_redirect_after_activation')) {
+            delete_transient('meta_capi_redirect_after_activation');
+
+            // Only redirect if this is a single plugin activation (not bulk).
+            if (isset($_GET['activate']) && !isset($_GET['activate-multi'])) {
+                wp_safe_redirect(admin_url('options-general.php?page=meta-conversions-api'));
+                exit;
+            }
+        }
+    }
+
+    /**
+     * Clear all caches (Breeze, Varnish, Cloudflare, WordPress).
+     * Static version for use during activation when instance may not be fully initialized.
+     *
+     * @return array Results of cache clearing operations.
+     */
+    public static function clear_all_caches_static(): array {
+        return self::get_instance()->clear_all_caches();
+    }
+
+    /**
+     * Clear external caches only (Breeze, Varnish, Cloudflare).
+     * WordPress cache is NOT cleared to protect plugin settings.
+     * Use this during activation to prevent clearing cached options.
+     *
+     * @return array Results of cache clearing operations.
+     */
+    public function clear_external_caches_only(): array {
+        $results = [
+            'breeze' => false,
+            'varnish' => false,
+            'cloudflare' => false,
+        ];
+
+        // Clear Breeze cache if plugin is active.
+        if (class_exists('Breeze_Admin')) {
+            if (function_exists('breeze_clear_all_cache')) {
+                breeze_clear_all_cache();
+                $results['breeze'] = true;
+            } elseif (defined('BREEZE_VERSION')) {
+                // Alternative method for newer Breeze versions.
+                do_action('breeze_clear_all_cache');
+                $results['breeze'] = true;
+            }
+        }
+
+        // Clear Varnish cache if available.
+        // Most Varnish implementations use PURGE method via HTTP.
+        $varnish_host = get_option('vhp_varnish_url', '');
+        if (!empty($varnish_host)) {
+            wp_remote_request($varnish_host, [
+                'method' => 'PURGE',
+                'timeout' => 5,
+            ]);
+            $results['varnish'] = true;
+        } else {
+            // Try default Varnish clearing methods.
+            $home_url = home_url('/');
+            $parsed_url = parse_url($home_url);
+            if (!empty($parsed_url['host'])) {
+                // Attempt PURGE request to common Varnish endpoints.
+                $varnish_endpoints = [
+                    $home_url,
+                    $parsed_url['scheme'] . '://' . $parsed_url['host'],
+                ];
+
+                foreach ($varnish_endpoints as $endpoint) {
+                    $response = wp_remote_request($endpoint, [
+                        'method' => 'PURGE',
+                        'timeout' => 5,
+                        'headers' => [
+                            'Host' => $parsed_url['host'],
+                            'X-Purge-Method' => 'default',
+                        ],
+                    ]);
+
+                    if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) < 500) {
+                        $results['varnish'] = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Clear Cloudflare cache if plugin is active.
+        if (class_exists('Cloudflare')) {
+            if (function_exists('cloudflare_purge_cache')) {
+                cloudflare_purge_cache();
+                $results['cloudflare'] = true;
+            } elseif (defined('CLOUDFLARE_VERSION')) {
+                // Try to clear via Cloudflare API if credentials are available.
+                $email = get_option('cloudflare_api_email');
+                $api_key = get_option('cloudflare_api_key');
+                $zone_id = get_option('cloudflare_zone_id');
+
+                if ($email && $api_key && $zone_id) {
+                    $response = wp_remote_post(
+                        sprintf('https://api.cloudflare.com/client/v4/zones/%s/purge_cache', $zone_id),
+                        [
+                            'headers' => [
+                                'X-Auth-Email' => $email,
+                                'X-Auth-Key' => $api_key,
+                                'Content-Type' => 'application/json',
+                            ],
+                            'body' => wp_json_encode(['purge_everything' => true]),
+                            'timeout' => 10,
+                        ]
+                    );
+
+                    if (!is_wp_error($response)) {
+                        $body = json_decode(wp_remote_retrieve_body($response), true);
+                        if (isset($body['success']) && $body['success']) {
+                            $results['cloudflare'] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Trigger action for other plugins to hook into.
+        do_action('meta_capi_cache_cleared', $results);
+
+        return $results;
+    }
+
+    /**
+     * Clear all caches (Breeze, Varnish, Cloudflare, WordPress).
+     * WARNING: wp_cache_flush() can clear cached options if using persistent object cache.
+     * Use clear_external_caches_only() during activation to protect settings.
+     *
+     * @return array Results of cache clearing operations.
+     */
+    public function clear_all_caches(): array {
+        $results = [
+            'wordpress' => false,
+            'breeze' => false,
+            'varnish' => false,
+            'cloudflare' => false,
+        ];
+
+        // Clear WordPress object cache.
+        // WARNING: This can clear cached options if using persistent object cache (Redis, Memcached).
+        // Only use when you're sure cached options won't be affected.
+        try {
+            wp_cache_flush();
+            $results['wordpress'] = true;
+        } catch (Exception $e) {
+            // Cache flush failed, but continue with other cache clearing.
+            // Log error if logger is available.
+            if (isset($this->logger)) {
+                $this->logger->warning('WordPress cache flush failed: ' . $e->getMessage());
+            }
+            $results['wordpress'] = false;
+        }
+
+        // Clear external caches (Breeze, Varnish, Cloudflare).
+        $external_results = $this->clear_external_caches_only();
+        $results['breeze'] = $external_results['breeze'];
+        $results['varnish'] = $external_results['varnish'];
+        $results['cloudflare'] = $external_results['cloudflare'];
+
+        // Trigger action for other plugins to hook into.
+        do_action('meta_capi_cache_cleared', $results);
+
+        return $results;
     }
 
     /**

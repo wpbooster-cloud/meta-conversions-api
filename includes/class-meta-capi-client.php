@@ -114,15 +114,34 @@ class Meta_CAPI_Client {
                 'Content-Type' => 'application/json',
             ],
             'body' => wp_json_encode($body),
-            'timeout' => 30,
+            'timeout' => 10, // Reduced from 30s to 10s for better performance
         ];
 
         // Add access token to URL.
         $url = add_query_arg('access_token', $this->access_token, $url);
 
+        // Log detailed event information for debugging deduplication.
+        // CRITICAL: Log user_data to verify fbp, IP, and user agent match browser-side.
+        $user_data_summary = [
+            'has_fbp' => !empty($event['user_data']['fbp']),
+            'fbp_value' => !empty($event['user_data']['fbp']) ? substr($event['user_data']['fbp'], 0, 20) . '...' : 'missing',
+            'has_fbc' => !empty($event['user_data']['fbc']),
+            'has_ip' => !empty($event['user_data']['client_ip_address']),
+            'ip_value' => !empty($event['user_data']['client_ip_address']) ? $event['user_data']['client_ip_address'] : 'missing',
+            'has_user_agent' => !empty($event['user_data']['client_user_agent']),
+            'user_agent_preview' => !empty($event['user_data']['client_user_agent']) ? substr($event['user_data']['client_user_agent'], 0, 50) . '...' : 'missing',
+            'has_em' => !empty($event['user_data']['em']),
+            'has_ph' => !empty($event['user_data']['ph']),
+        ];
+        
         $this->logger->info('Sending event to Facebook Conversions API', [
             'event_name' => $event_data['event_name'] ?? 'unknown',
+            'event_id' => $event['event_id'] ?? 'none',
+            'event_time' => $event['event_time'] ?? 'none',
+            'event_time_formatted' => isset($event['event_time']) ? date('Y-m-d H:i:s', $event['event_time']) : 'none',
+            'user_data' => $user_data_summary,
             'url' => preg_replace('/access_token=[^&]+/', 'access_token=***', $url),
+            'source' => 'CAPI',
         ]);
 
         // Send the request.
@@ -150,6 +169,9 @@ class Meta_CAPI_Client {
 
         if ($response_code >= 200 && $response_code < 300) {
             $this->logger->info('Event sent successfully', [
+                'event_name' => $event_data['event_name'] ?? 'unknown',
+                'event_id' => $event['event_id'] ?? 'none',
+                'event_time' => $event['event_time'] ?? 'none',
                 'response' => $decoded_response,
             ]);
 
@@ -222,23 +244,54 @@ class Meta_CAPI_Client {
     private function prepare_user_data(array $user_data): array {
         $prepared = [];
 
+        // CRITICAL: For async events (processed by cron), user_data is captured from the original request
+        // and passed in event_data. We MUST use the provided user_data, not try to detect from $_SERVER
+        // (which would be the cron process's IP/user agent, not the browser's).
+        // Only use fallback detection if user_data is completely empty (shouldn't happen for async events).
+        
         // Get client IP address.
-        $prepared['client_ip_address'] = $user_data['client_ip_address'] ?? $this->get_client_ip();
+        if (!empty($user_data['client_ip_address'])) {
+            $prepared['client_ip_address'] = $user_data['client_ip_address'];
+        } elseif (empty($user_data)) {
+            // Only fallback if user_data is completely empty (shouldn't happen for async events).
+            $prepared['client_ip_address'] = $this->get_client_ip();
+        } else {
+            // user_data exists but client_ip_address is missing - this is a bug, log warning
+            $this->logger->warning('user_data provided but client_ip_address missing', [
+                'user_data_keys' => array_keys($user_data),
+            ]);
+        }
 
         // Get user agent.
-        $prepared['client_user_agent'] = $user_data['client_user_agent'] ?? $this->get_user_agent();
+        if (!empty($user_data['client_user_agent'])) {
+            $prepared['client_user_agent'] = $user_data['client_user_agent'];
+        } elseif (empty($user_data)) {
+            // Only fallback if user_data is completely empty (shouldn't happen for async events).
+            $prepared['client_user_agent'] = $this->get_user_agent();
+        } else {
+            // user_data exists but client_user_agent is missing - this is a bug, log warning
+            $this->logger->warning('user_data provided but client_user_agent missing', [
+                'user_data_keys' => array_keys($user_data),
+            ]);
+        }
 
         // Get Facebook browser ID (fbp cookie).
+        // CRITICAL: Use provided fbp from user_data (captured from original request).
+        // Don't fallback to $_COOKIE in cron context (cookies won't be available).
         if (!empty($user_data['fbp'])) {
             $prepared['fbp'] = $user_data['fbp'];
-        } elseif (!empty($_COOKIE['_fbp'])) {
+        } elseif (empty($user_data) && !empty($_COOKIE['_fbp'])) {
+            // Only fallback if user_data is completely empty (shouldn't happen for async events).
             $prepared['fbp'] = sanitize_text_field($_COOKIE['_fbp']);
         }
 
         // Get Facebook click ID (fbc cookie).
+        // CRITICAL: Use provided fbc from user_data (captured from original request).
+        // Don't fallback to $_COOKIE in cron context (cookies won't be available).
         if (!empty($user_data['fbc'])) {
             $prepared['fbc'] = $user_data['fbc'];
-        } elseif (!empty($_COOKIE['_fbc'])) {
+        } elseif (empty($user_data) && !empty($_COOKIE['_fbc'])) {
+            // Only fallback if user_data is completely empty (shouldn't happen for async events).
             $prepared['fbc'] = sanitize_text_field($_COOKIE['_fbc']);
         }
 
@@ -301,21 +354,71 @@ class Meta_CAPI_Client {
 
     /**
      * Get client IP address.
+     * Handles CDN/proxy headers correctly for deduplication.
+     * Security: Checks headers in order of trust (most trusted first).
+     * Meta Pixel uses the browser's actual IP, so we must extract the real client IP.
      *
      * @return string Client IP address.
      */
     private function get_client_ip(): string {
         $ip = '';
 
-        if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-            $ip = $_SERVER['HTTP_CLIENT_IP'];
-        } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
-        } elseif (!empty($_SERVER['REMOTE_ADDR'])) {
-            $ip = $_SERVER['REMOTE_ADDR'];
+        // Check headers in order of trust (most trusted first).
+        // Security: HTTP_X_FORWARDED_FOR can be spoofed by clients, so check it last.
+        // Priority order: HTTP_CLIENT_IP before HTTP_X_REAL_IP for universal compatibility.
+        // HTTP_X_REAL_IP is Nginx-specific, while HTTP_CLIENT_IP is more universally supported.
+        $headers = [
+            'HTTP_CF_CONNECTING_IP', // Cloudflare (most trusted when using CF).
+            'HTTP_CLIENT_IP',        // Universal proxy header (check before Nginx-specific).
+            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (Nginx-specific, check after HTTP_CLIENT_IP).
+            'HTTP_X_FORWARDED_FOR',  // Last: can be spoofed by clients (check last for security).
+        ];
+
+        foreach ($headers as $header) {
+            if (!empty($_SERVER[$header])) {
+                $ip = sanitize_text_field(wp_unslash($_SERVER[$header]));
+                
+                // Handle comma-separated IPs (X-Forwarded-For can have multiple IPs: "client, proxy1, proxy2").
+                // We want the FIRST (original client) IP.
+                if (strpos($ip, ',') !== false) {
+                    $ips = explode(',', $ip);
+                    $ip = trim($ips[0]);
+                }
+                
+                // Remove port number if present (e.g., "192.168.1.1:8080" -> "192.168.1.1").
+                // Apply this BEFORE validation to ensure consistent handling.
+                if (strpos($ip, ':') !== false) {
+                    $ip_parts = explode(':', $ip);
+                    $ip = $ip_parts[0];
+                }
+
+                // Validate it's a real IP address (allow private/reserved ranges for local testing).
+                if (!empty($ip) && filter_var($ip, FILTER_VALIDATE_IP)) {
+                    return $ip;
+                }
+                
+                // If IP from header failed validation, continue to next header (don't break).
+                // This ensures we try all headers before falling back to REMOTE_ADDR.
+            }
         }
 
-        return sanitize_text_field($ip);
+        // Fallback to REMOTE_ADDR (might be proxy IP, but better than nothing).
+        // Apply same port-stripping logic as headers for consistency.
+        $fallback_ip = !empty($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
+        
+        // Remove port number if present (CRITICAL: must do this before validation).
+        // Bug fix: Previously this wasn't done, causing IPs with ports to fail validation.
+        if (!empty($fallback_ip) && strpos($fallback_ip, ':') !== false) {
+            $ip_parts = explode(':', $fallback_ip);
+            $fallback_ip = $ip_parts[0];
+        }
+        
+        // Validate fallback IP too.
+        if (!empty($fallback_ip) && filter_var($fallback_ip, FILTER_VALIDATE_IP)) {
+            return $fallback_ip;
+        }
+        
+        return '';
     }
 
     /**

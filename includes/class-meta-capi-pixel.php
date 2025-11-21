@@ -23,6 +23,19 @@ if (!defined('ABSPATH')) {
  * Meta CAPI Pixel Management Class.
  */
 class Meta_CAPI_Pixel {
+    /**
+     * Global flag to prevent duplicate pixel injection across all instances.
+     *
+     * @var bool
+     */
+    private static bool $pixel_injected_global = false;
+
+    /**
+     * Global flag to prevent duplicate hook registrations across all instances.
+     *
+     * @var bool
+     */
+    private static bool $hooks_registered_global = false;
 
     /**
      * Meta CAPI Logger instance.
@@ -98,16 +111,41 @@ class Meta_CAPI_Pixel {
      * @return void
      */
     private function init_hooks(): void {
+        // Prevent duplicate hook registrations across ALL instances (global static flag).
+        if (self::$hooks_registered_global) {
+            return;
+        }
+        
+        $hooks_registered = false;
+        
         // Only inject pixel if enabled and pixel ID is set.
         if ($this->auto_inject && !empty($this->pixel_id)) {
             add_action('wp_head', [$this, 'inject_pixel_code'], 5);
             add_action('wp_footer', [$this, 'inject_pixel_noscript'], 100);
-            $this->logger->info('Pixel injection hooks registered');
+            $hooks_registered = true;
+            $this->logger->info('Pixel injection hooks registered (global)');
+        } else {
+            // Log why hooks weren't registered (for debugging).
+            $this->logger->log('Pixel injection hooks NOT registered', 'debug', [
+                'auto_inject' => $this->auto_inject,
+                'pixel_id_set' => !empty($this->pixel_id),
+                'pixel_id' => !empty($this->pixel_id) ? 'set' : 'empty',
+            ]);
         }
 
-        // Admin hooks for pixel detection.
+        // Admin hooks for pixel detection (always register if in admin, regardless of pixel injection status).
         if (is_admin()) {
             add_action('admin_init', [$this, 'detect_existing_pixel']);
+        }
+        
+        // CRITICAL: Only set flag to true if hooks were actually registered.
+        // If pixel injection is disabled or pixel_id is empty, don't set the flag,
+        // allowing subsequent instances with proper configuration to register hooks.
+        if ($hooks_registered) {
+            self::$hooks_registered_global = true;
+            $this->logger->log('Global hooks flag set to true (hooks were registered)', 'debug');
+        } else {
+            $this->logger->log('Global hooks flag NOT set (no hooks registered - allows subsequent instances to register)', 'debug');
         }
     }
 
@@ -120,6 +158,13 @@ class Meta_CAPI_Pixel {
      * @return void
      */
     public function inject_pixel_code(): void {
+        // Log that this method was called (for debugging duplicate injections).
+        $this->logger->log('inject_pixel_code() called', 'debug', [
+            'hook' => current_filter(),
+            'pixel_injected_global' => self::$pixel_injected_global,
+            'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2), // Show call stack
+        ]);
+        
         // Don't inject for logged-in admins (optional).
         if ($this->should_skip_tracking()) {
             $this->logger->info('Skipping pixel injection for current user');
@@ -137,6 +182,14 @@ class Meta_CAPI_Pixel {
             $this->logger->info('Pixel already detected on page, skipping injection');
             return;
         }
+
+        // Use a global static flag to prevent duplicate injection across all instances.
+        // This is a fallback in case is_pixel_already_loaded() doesn't catch it.
+        if (self::$pixel_injected_global) {
+            $this->logger->warning('Pixel injection attempted multiple times in same request, preventing duplicate');
+            return;
+        }
+        self::$pixel_injected_global = true;
 
         // Check if current page is excluded from tracking.
         $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
@@ -167,15 +220,183 @@ class Meta_CAPI_Pixel {
         s.parentNode.insertBefore(t,s)}(window, document,'script',
         'https://connect.facebook.net/en_US/fbevents.js');
         
-        <?php if ($this->settings['disable_auto_config']): ?>
+        // CRITICAL: Always disable autoConfig to prevent automatic PageView tracking.
+        // Meta Pixel's auto PageView fires immediately on init with its own timestamp,
+        // which would break deduplication. We track PageView manually with our event ID.
         fbq('set', 'autoConfig', false, '<?php echo esc_js($this->pixel_id); ?>');
-        <?php endif; ?>
         fbq('init', '<?php echo esc_js($this->pixel_id); ?>');
-        <?php if (!$this->settings['disable_auto_config']): ?>
-        fbq('track', 'PageView');
+        
+        <?php
+        // Get event ID from tracking class (generated early in template_redirect).
+        // This is the SAME event ID used by CAPI for deduplication.
+        // Single source of truth: static property in Meta_CAPI_Tracking class.
+        $pageview_event_id = '';
+        if (class_exists('Meta_CAPI_Tracking')) {
+            $pageview_event_id = Meta_CAPI_Tracking::get_pageview_event_id();
+            
+            // CRITICAL: Log whether event ID was found or not (for debugging duplicate event IDs).
+            if (empty($pageview_event_id)) {
+                $this->logger->warning('PageView event ID NOT FOUND during Pixel injection - Pixel will track WITHOUT eventID', [
+                    'hook' => 'wp_head',
+                    'warning' => 'This means CAPI and Pixel will have different event IDs, breaking deduplication',
+                    'note' => 'Event ID should have been generated on template_redirect hook',
+                    'action' => 'Pixel will track without eventID - deduplication will NOT work',
+                ]);
+            } else {
+                $this->logger->log('PageView event ID retrieved for Pixel injection', 'debug', [
+                    'hook' => 'wp_head',
+                    'event_id' => $pageview_event_id,
+                    'note' => 'This is the SAME event ID that CAPI will use',
+                ]);
+            }
+            
+            // CRITICAL: DO NOT generate event ID on-demand here!
+            // If we generate a NEW event ID at this point, it will be different from the one used by CAPI,
+            // causing deduplication to fail. The event ID MUST be generated on template_redirect
+            // (or earlier) so both CAPI and Pixel use the same ID.
+            // If the event ID is missing, it's better to track without it (and log a warning)
+            // than to generate a different ID that breaks deduplication.
+        }
+        
+        // CRITICAL: We MUST have the same event ID as CAPI for deduplication.
+        // If event ID is still empty after on-demand generation, Pixel will track without eventID.
+        // This should not happen, but it's better than generating a different ID.
+        ?>
+        <?php if (!empty($pageview_event_id)): ?>
+        // Track PageView with event ID for deduplication with CAPI (same event ID).
+        // CRITICAL: Use multiple flags to prevent duplicate tracking:
+        // 1. Check if already tracked (window._metaCapiPageViewTracked)
+        // 2. Set flag immediately before tracking (prevents race conditions)
+        // 3. Also check if fbq has already been called for PageView
+        (function() {
+            // CRITICAL: Check if PageView was already tracked (prevents duplicates).
+            if (typeof window._metaCapiPageViewTracked !== 'undefined' && window._metaCapiPageViewTracked === true) {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[Meta CAPI] PageView already tracked, preventing duplicate (browser-side check)', {
+                        event_id: '<?php echo esc_js($pageview_event_id); ?>',
+                        timestamp: new Date().toISOString()
+                    });
+                }
+                return; // Exit immediately if already tracked.
+            }
+            
+            // Set flag IMMEDIATELY to prevent race conditions if script runs multiple times.
+            window._metaCapiPageViewTracked = true;
+            var eventId = '<?php echo esc_js($pageview_event_id); ?>';
+            
+            // CRITICAL: Extract timestamp from event_id to match server-side event_time exactly.
+            // Event ID format: pageview_{identifier}_{timestamp_ms} where timestamp is in milliseconds.
+            // We extract this and convert to seconds to ensure perfect alignment with CAPI.
+            var eventTime = (function() {
+                var parts = eventId.split('_');
+                if (parts.length >= 3) {
+                    var timestampMs = parseInt(parts[parts.length - 1], 10);
+                    if (!isNaN(timestampMs)) {
+                        return Math.floor(timestampMs / 1000); // Convert milliseconds to seconds.
+                    }
+                }
+                // Fallback to current time if extraction fails (shouldn't happen).
+                return Math.floor(Date.now() / 1000);
+            })();
+            
+            // Log PageView event details for debugging deduplication.
+            // CRITICAL: Log user_data info that Pixel will send for deduplication comparison.
+            if (typeof console !== 'undefined' && console.log) {
+                // Get fbp cookie (Meta Pixel automatically includes this in user_data).
+                var fbpCookie = '';
+                var cookies = document.cookie.split(';');
+                for (var i = 0; i < cookies.length; i++) {
+                    var cookie = cookies[i].trim();
+                    if (cookie.indexOf('_fbp=') === 0) {
+                        fbpCookie = cookie.substring(5);
+                        break;
+                    }
+                }
+                
+                console.log('[Meta CAPI Debug] PageView tracked via Pixel', {
+                    event_id: eventId,
+                    event_time: eventTime,
+                    event_time_formatted: new Date(eventTime * 1000).toISOString(),
+                    event_time_unix: eventTime,
+                    source: 'Browser',
+                    url: window.location.href,
+                    user_data: {
+                        fbp: fbpCookie || 'not_set_yet',
+                        fbp_preview: fbpCookie ? fbpCookie.substring(0, 20) + '...' : 'not_set_yet',
+                        note: 'Meta Pixel automatically includes fbp, IP, and user agent in event'
+                    }
+                });
+            }
+            
+            // CRITICAL: Pass both eventID and eventTime for perfect deduplication alignment.
+            // eventTime must match the server-side event_time exactly.
+            // Meta Pixel v2.0+ respects the eventTime parameter when provided.
+            // We MUST use the timestamp extracted from event_id (not current time) to match server.
+            // IMPORTANT: eventTime must be a Unix timestamp in seconds (not milliseconds).
+            var currentTime = Math.floor(Date.now() / 1000);
+            if (typeof console !== 'undefined' && console.log) {
+                console.log('[Meta CAPI] PageView tracking with extracted timestamp', {
+                    event_id: eventId,
+                    event_time_extracted: eventTime,
+                    event_time_current: currentTime,
+                    time_difference_seconds: currentTime - eventTime,
+                    note: 'eventTime MUST match server-side event_time exactly for deduplication'
+                });
+            }
+            
+            try {
+                // Meta Pixel API: fbq('track', eventName, eventData, options)
+                // options can include: eventID, eventTime, etc.
+                // This is Meta's official format for deduplication.
+                // eventTime MUST match server-side event_time exactly (Unix timestamp in seconds).
+                fbq('track', 'PageView', {}, {
+                    eventID: eventId,
+                    eventTime: eventTime
+                });
+            } catch (e) {
+                // Fallback if fbq fails - log error but still try to track with eventID only.
+                if (typeof console !== 'undefined' && console.error) {
+                    console.error('[Meta CAPI] Error tracking PageView:', e);
+                }
+                // Fallback: Track with eventID only (deduplication may still work if event_time matches).
+                fbq('track', 'PageView', {}, {
+                    eventID: eventId
+                });
+            }
+        })(); // End self-executing function to prevent duplicate execution.
         <?php else: ?>
-        // Manual PageView when auto_config is disabled (to match server-side tracking)
-        fbq('track', 'PageView');
+        // PageView event ID not available - track without eventID (deduplication will not work).
+        // This should not happen if template_redirect hook ran properly.
+        // CRITICAL: Use self-executing function with duplicate check to prevent multiple executions.
+        (function() {
+            // CRITICAL: Check if PageView was already tracked (prevents duplicates).
+            if (typeof window._metaCapiPageViewTracked !== 'undefined' && window._metaCapiPageViewTracked === true) {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('[Meta CAPI] PageView already tracked, preventing duplicate (browser-side check, no event ID)', {
+                        timestamp: new Date().toISOString()
+                    });
+                }
+                return; // Exit immediately if already tracked.
+            }
+            
+            // Set flag IMMEDIATELY to prevent race conditions.
+            window._metaCapiPageViewTracked = true;
+            var eventTime = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
+            
+            // Log PageView event details for debugging deduplication.
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[Meta CAPI Debug] PageView tracked via Pixel WITHOUT event ID (deduplication will fail)', {
+                    event_id: 'none',
+                    event_time: eventTime,
+                    event_time_formatted: new Date(eventTime * 1000).toISOString(),
+                    event_time_unix: eventTime,
+                    source: 'Browser',
+                    url: window.location.href
+                });
+            }
+            
+            fbq('track', 'PageView');
+        })(); // End self-executing function to prevent duplicate execution.
         <?php endif; ?>
         </script>
         <!-- End Meta Pixel Code -->
@@ -312,22 +533,48 @@ class Meta_CAPI_Pixel {
     private function should_skip_tracking(): bool {
         // Skip in admin area.
         if (is_admin()) {
+            $this->logger->log('should_skip_tracking() returning true - is_admin()', 'debug');
             return true;
         }
 
         // Skip for AJAX requests.
         if (wp_doing_ajax()) {
+            $this->logger->log('should_skip_tracking() returning true - wp_doing_ajax()', 'debug');
             return true;
         }
 
         // Skip for preview/draft pages.
         if (is_preview() || is_customize_preview()) {
+            $this->logger->log('should_skip_tracking() returning true - is_preview() or is_customize_preview()', 'debug');
             return true;
         }
 
-        // Optional: Skip for logged-in admins.
-        $skip_admins = (bool) get_option('meta_capi_pixel_skip_admins', false);
-        if ($skip_admins && current_user_can('manage_options')) {
+        // CRITICAL: Skip for logged-in admins (consistent with CAPI tracking).
+        // This prevents admin users from triggering Pixel events when viewing the frontend.
+        // Note: is_admin() only returns true for admin dashboard pages, not when admin views frontend.
+        // So we must check current_user_can('manage_options') separately for frontend pages.
+        // Use same filter as CAPI tracking for consistency: meta_capi_skip_admin_tracking (defaults to true).
+        // Also check if user is logged in first to avoid false positives.
+        $user_is_logged_in = is_user_logged_in();
+        $is_admin_user = $user_is_logged_in && current_user_can('manage_options');
+        $skip_admin_tracking = apply_filters('meta_capi_skip_admin_tracking', true);
+        
+        // Log admin check details for debugging.
+        if ($user_is_logged_in) {
+            $this->logger->log('User is logged in, checking admin status in should_skip_tracking()', 'debug', [
+                'user_id' => get_current_user_id(),
+                'is_admin_user' => $is_admin_user,
+                'skip_admin_tracking_filter' => $skip_admin_tracking,
+            ]);
+        }
+        
+        if ($is_admin_user && $skip_admin_tracking) {
+            $this->logger->log('should_skip_tracking() returning true - admin user (skip admin tracking enabled)', 'info', [
+                'user_id' => get_current_user_id(),
+                'is_admin_user' => $is_admin_user,
+                'skip_admin_tracking_filter' => $skip_admin_tracking,
+                'note' => 'Admin users are excluded from Pixel tracking by default',
+            ]);
             return true;
         }
 

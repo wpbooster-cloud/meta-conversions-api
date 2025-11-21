@@ -189,5 +189,30 @@ class Meta_CAPI_Logger {
             }
         }
     }
+
+    /**
+     * Clear all log files.
+     *
+     * @return int Number of files deleted.
+     */
+    public function clear_all_logs(): int {
+        $upload_dir = wp_upload_dir();
+        $log_dir = $upload_dir['basedir'] . '/meta-capi-logs';
+
+        if (!is_dir($log_dir)) {
+            return 0;
+        }
+
+        $files = glob($log_dir . '/meta-capi-*.log');
+        $count = 0;
+
+        foreach ($files as $file) {
+            if (wp_delete_file($file)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
 }
 

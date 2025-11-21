@@ -520,7 +520,8 @@ class Meta_CAPI_Settings {
             // Show recommendations panel if there are any
             $plugin_instance = meta_capi();
             if (isset($plugin_instance->system_status)) {
-                $status = $plugin_instance->system_status->get_status();
+                // Use cached status to avoid blocking HTTP requests on settings page load
+                $status = $plugin_instance->system_status->get_status(false);
                 $has_recommendations = !empty($status['recommendations']);
                 $rec_count = count($status['recommendations'] ?? []);
                 
@@ -708,7 +709,8 @@ class Meta_CAPI_Settings {
             placeholder="<?php esc_attr_e('TEST12345', 'meta-conversions-api'); ?>"
         >
         <p class="description">
-            <?php esc_html_e('Optional: Test Event Code for testing in Facebook Events Manager.', 'meta-conversions-api'); ?>
+            <?php esc_html_e('Optional: Test Event Code for testing in Facebook Events Manager.', 'meta-conversions-api'); ?><br>
+            <strong><?php esc_html_e('Note:', 'meta-conversions-api'); ?></strong> <?php esc_html_e('Test event codes can change or expire. If events stop appearing in the Test Events tab, check Events Manager for a new code.', 'meta-conversions-api'); ?>
         </p>
         <?php if (!empty($value)): ?>
             <div class="notice notice-info inline" style="margin: 10px 0; padding: 8px 12px;">
@@ -2163,25 +2165,49 @@ class Meta_CAPI_Settings {
         }
 
         // Handle clear logs action
-        if (isset($_POST['clear_logs']) && check_admin_referer('meta_capi_clear_logs')) {
-            $this->clear_all_logs();
+        if (isset($_POST['clear_logs'])) {
+            $nonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
+            if (!wp_verify_nonce($nonce, 'meta_capi_clear_logs')) {
+                add_settings_error(
+                    'meta_capi_tools',
+                    'nonce_expired',
+                    __('Security token expired. Please refresh the page and try again.', 'meta-conversions-api'),
+                    'error'
+                );
+            } else {
+                $this->clear_all_logs();
+                add_settings_error(
+                    'meta_capi_tools',
+                    'logs_cleared',
+                    __('Debug logs cleared successfully.', 'meta-conversions-api'),
+                    'success'
+                );
+            }
         }
 
         // Handle toggle debug logging
-        if (isset($_POST['toggle_debug']) && check_admin_referer('meta_capi_toggle_debug')) {
-            $current = get_option('meta_capi_enable_logging', false);
-            update_option('meta_capi_enable_logging', !$current);
-            
-            add_settings_error(
-                'meta_capi_tools',
-                'debug_toggled',
-                sprintf(
-                    __('Debug logging %s.', 'meta-conversions-api'),
-                    !$current ? __('enabled', 'meta-conversions-api') : __('disabled', 'meta-conversions-api')
-                ),
-                'success'
-            );
-            settings_errors('meta_capi_tools');
+        if (isset($_POST['toggle_debug'])) {
+            $nonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
+            if (!wp_verify_nonce($nonce, 'meta_capi_toggle_debug')) {
+                add_settings_error(
+                    'meta_capi_tools',
+                    'nonce_expired',
+                    __('Security token expired. Please refresh the page and try again.', 'meta-conversions-api'),
+                    'error'
+                );
+            } else {
+                $current = get_option('meta_capi_enable_logging', false);
+                update_option('meta_capi_enable_logging', !$current);
+                add_settings_error(
+                    'meta_capi_tools',
+                    'debug_toggled',
+                    sprintf(
+                        __('Debug logging %s.', 'meta-conversions-api'),
+                        !$current ? __('enabled', 'meta-conversions-api') : __('disabled', 'meta-conversions-api')
+                    ),
+                    'success'
+                );
+            }
         }
 
         // Show update check success message
@@ -2375,7 +2401,8 @@ class Meta_CAPI_Settings {
                         // Get advanced system status
                         $plugin_instance = meta_capi();
                         if (isset($plugin_instance->system_status)) {
-                            $status = $plugin_instance->system_status->get_status();
+                            // Use cached status to avoid blocking HTTP requests on settings page load
+                            $status = $plugin_instance->system_status->get_status(false);
                             ?>
                             <tr style="background-color: #d5e8f7; border-top: 2px solid #72aee6;">
                                 <td colspan="2" style="padding: 8px;"><strong><?php esc_html_e('Environment & Compatibility', 'meta-conversions-api'); ?></strong></td>

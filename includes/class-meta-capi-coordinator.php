@@ -294,12 +294,15 @@ class Meta_CAPI_Coordinator {
     private function get_client_ip(): string {
         $ip = '';
 
-        // Check for proxy headers.
+        // Check for proxy headers (in order of trust).
+        // Priority order: HTTP_CLIENT_IP before HTTP_X_REAL_IP for universal compatibility.
+        // HTTP_X_REAL_IP is Nginx-specific, while HTTP_CLIENT_IP is more universally supported.
         $headers = [
-            'HTTP_CF_CONNECTING_IP', // Cloudflare.
-            'HTTP_X_REAL_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'REMOTE_ADDR',
+            'HTTP_CF_CONNECTING_IP', // Cloudflare (most trusted when using CF).
+            'HTTP_CLIENT_IP',        // Universal proxy header (check before Nginx-specific).
+            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (Nginx-specific, check after HTTP_CLIENT_IP).
+            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check last.
+            'REMOTE_ADDR',           // Fallback (proxy IP, not client IP).
         ];
 
         foreach ($headers as $header) {

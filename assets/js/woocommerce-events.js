@@ -36,12 +36,21 @@
 
             /**
              * Generate event ID for deduplication
-             * Matches server-side format for proper deduplication
+             * Matches server-side Coordinator format: eventtype_identifier_timestamp
+             * Uses milliseconds timestamp (same as server) for exact matching
              */
             generateEventId: function(eventName, uniqueId = '') {
+                // Normalize event name to lowercase (matches server-side sanitize_key)
+                const eventType = eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+                // Use milliseconds timestamp (same as server-side Coordinator)
                 const timestamp = Date.now();
-                const random = Math.random().toString(36).substring(2, 15);
-                return eventName + '_' + uniqueId + '_' + timestamp + '_' + random;
+                // Format: eventtype_identifier_timestamp (NO random component - must match server exactly)
+                // Handle empty uniqueId to avoid double underscores
+                if (uniqueId && uniqueId.trim() !== '') {
+                    return eventType + '_' + uniqueId + '_' + timestamp;
+                } else {
+                    return eventType + '_' + timestamp;
+                }
             },
 
             /**
@@ -57,7 +66,15 @@
                     return;
                 }
 
-                const eventId = this.generateEventId('ViewContent', productData.id);
+                // Use server-generated event ID for deduplication (if available).
+                // Server generates this on page load, ensuring Pixel and CAPI use the SAME event ID.
+                let eventId = productData.viewcontent_event_id;
+                
+                // Fallback: Generate if server didn't provide one (shouldn't happen).
+                if (!eventId) {
+                    console.warn('Meta CAPI: ViewContent event ID not provided by server, generating fallback (deduplication may not work)');
+                    eventId = this.generateEventId('ViewContent', productData.id);
+                }
 
                 fbq('track', 'ViewContent', {
                     content_ids: [productData.id],
@@ -102,7 +119,31 @@
                         productData.quantity = quantity;
                     }
 
-                    const eventId = self.generateEventId('AddToCart', productId);
+                    // CRITICAL: Get event ID from server (via AJAX fragments) for deduplication.
+                    // Server generates the event ID during woocommerce_add_to_cart hook,
+                    // and passes it via fragments. We MUST use this same ID to match CAPI.
+                    let eventId = '';
+                    let isFallback = false; // Track if we're using a fallback-generated ID.
+                    
+                    // Extract event ID from fragments (if provided by server).
+                    // The server injects it as a hidden div in fragments['meta_capi_addtocart_event_id'].
+                    if (fragments && fragments.meta_capi_addtocart_event_id) {
+                        // Parse HTML fragment to extract data-event-id attribute.
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = fragments.meta_capi_addtocart_event_id;
+                        const eventIdElement = tempDiv.querySelector('#meta-capi-addtocart-event-id');
+                        if (eventIdElement) {
+                            eventId = eventIdElement.getAttribute('data-event-id') || '';
+                        }
+                    }
+                    
+                    // Fallback: Generate if server didn't provide one (shouldn't happen).
+                    // This will break deduplication, but at least the event will fire.
+                    if (!eventId) {
+                        console.warn('Meta CAPI: AddToCart event ID not provided by server, generating fallback (deduplication may not work)');
+                        eventId = self.generateEventId('AddToCart', productId);
+                        isFallback = true; // Mark as fallback-generated.
+                    }
                     
                     // Get currency safely
                     const currency = productData.currency || 
@@ -121,7 +162,8 @@
                     console.log('Meta CAPI: AddToCart event tracked (AJAX)', {
                         product_id: productId,
                         quantity: quantity,
-                        event_id: eventId
+                        event_id: eventId,
+                        source: isFallback ? 'browser_generated' : 'server_provided'
                     });
                 });
 
@@ -135,10 +177,30 @@
                     const quantityInput = $(this).find('input[name="quantity"]');
                     const quantity = quantityInput.length ? parseInt(quantityInput.val()) : 1;
 
-                    const eventId = self.generateEventId('AddToCart', productData.id);
+                    // CRITICAL: Use server-generated event ID for deduplication (pre-generated on product page).
+                    // For variable products, check if there's a variation-specific event ID.
+                    let eventId = '';
+                    let isFallback = false; // Track if we're using a fallback-generated ID.
+                    const variationInput = $(this).find('input[name="variation_id"]');
+                    const variationId = variationInput.length ? variationInput.val() : null;
+                    
+                    if (variationId && productData.addtocart_event_ids && productData.addtocart_event_ids[variationId]) {
+                        // Use variation-specific event ID.
+                        eventId = productData.addtocart_event_ids[variationId];
+                    } else if (productData.addtocart_event_id) {
+                        // Use main product event ID.
+                        eventId = productData.addtocart_event_id;
+                    }
+                    
+                    // Fallback: Generate if server didn't provide one (shouldn't happen).
+                    if (!eventId) {
+                        console.warn('Meta CAPI: AddToCart event ID not provided by server for form submission, generating fallback (deduplication may not work)');
+                        eventId = self.generateEventId('AddToCart', variationId || productData.id);
+                        isFallback = true; // Mark as fallback-generated.
+                    }
 
                     fbq('track', 'AddToCart', {
-                        content_ids: [productData.id],
+                        content_ids: [variationId || productData.id],
                         content_name: productData.name,
                         content_type: 'product',
                         value: productData.price * quantity,
@@ -148,9 +210,10 @@
                     });
 
                     console.log('Meta CAPI: AddToCart event tracked (Form)', {
-                        product_id: productData.id,
+                        product_id: variationId || productData.id,
                         quantity: quantity,
-                        event_id: eventId
+                        event_id: eventId,
+                        source: isFallback ? 'browser_generated' : 'server_provided'
                     });
                 });
             },
@@ -168,7 +231,17 @@
                     return;
                 }
 
-                const eventId = this.generateEventId('InitiateCheckout');
+                // Use server-generated event ID for deduplication (if available).
+                // Server generates this on checkout page load, ensuring Pixel and CAPI use the SAME event ID.
+                // Format: checkout_{session_id}_{timestamp} - must match server-side exactly.
+                let eventId = cartData.initiatecheckout_event_id;
+                
+                // Fallback: Generate if server didn't provide one (shouldn't happen).
+                if (!eventId) {
+                    console.warn('Meta CAPI: InitiateCheckout event ID not provided by server, generating fallback (deduplication may not work)');
+                    // Try to get session identifier (would need to be passed from server for proper matching).
+                    eventId = this.generateEventId('InitiateCheckout', '');
+                }
 
                 fbq('track', 'InitiateCheckout', {
                     content_ids: cartData.content_ids || [],

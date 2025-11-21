@@ -309,7 +309,7 @@ class Meta_CAPI_Scripts {
         wp_enqueue_script(
             'meta-capi-wc-events',
             META_CAPI_PLUGIN_URL . 'assets/js/woocommerce-events' . $suffix . '.js',
-            ['meta-capi-pixel'], // Depends on pixel helper
+            ['jquery', 'meta-capi-pixel'], // CRITICAL: Depends on meta-capi-pixel for window.metaCAPI_pageViewEventId and other globals
             META_CAPI_VERSION,
             true // Load in footer
         );
@@ -349,6 +349,27 @@ class Meta_CAPI_Scripts {
      */
     private function localize_scripts(): void {
         // Base configuration for Meta Pixel helper.
+        // Include PageView event ID if available (for deduplication).
+        $pageview_event_id = '';
+        if (class_exists('Meta_CAPI_Tracking')) {
+            $pageview_event_id = Meta_CAPI_Tracking::get_pageview_event_id();
+            
+            // CRITICAL: If event ID is not yet generated (timing issue), generate it now.
+            // This ensures Pixel always has the event ID, even if hooks didn't fire in time.
+            if (empty($pageview_event_id) && !is_admin() && !wp_doing_ajax() && !wp_doing_cron()) {
+                // Trigger event ID generation on-the-fly (will use static property to prevent duplicates).
+                $tracking_instance = meta_capi()->tracking;
+                if ($tracking_instance && method_exists($tracking_instance, 'generate_pageview_event_id')) {
+                    $tracking_instance->generate_pageview_event_id();
+                    $pageview_event_id = Meta_CAPI_Tracking::get_pageview_event_id();
+                    $this->logger->info('PageView event ID generated on-demand during script localization', [
+                        'event_id' => $pageview_event_id,
+                        'hook' => 'wp_enqueue_scripts',
+                    ]);
+                }
+            }
+        }
+        
         wp_localize_script(
             'meta-capi-pixel',
             'meta_capi_config',
@@ -356,6 +377,8 @@ class Meta_CAPI_Scripts {
                 'debug' => $this->debug_mode,
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('meta_capi_ajax'),
+                'pageview_event_id' => $pageview_event_id, // Pass to browser for Pixel tracking.
+                'server_time' => time(), // Pass server time for comparison with browser time.
             ]
         );
 
@@ -400,12 +423,44 @@ class Meta_CAPI_Scripts {
                     }, $categories);
                 }
 
+                // Get ViewContent event ID (generated early in template_redirect).
+                // This ensures both Pixel and CAPI use the SAME event ID.
+                $viewcontent_event_id = '';
+                if (class_exists('Meta_CAPI_WooCommerce')) {
+                    $viewcontent_event_id = Meta_CAPI_WooCommerce::get_viewcontent_event_id();
+                }
+
+                // Get pre-generated AddToCart event IDs for traditional form submissions.
+                // These are generated on product page load and will be used by both browser and server.
+                $addtocart_event_id = '';
+                $addtocart_event_ids = [];
+                if (class_exists('Meta_CAPI_WooCommerce')) {
+                    $addtocart_event_id = Meta_CAPI_WooCommerce::get_form_addtocart_event_id($product->get_id());
+                    
+                    // If product has variations, get event IDs for each variation.
+                    if ($product->is_type('variable')) {
+                        $variations = $product->get_available_variations();
+                        foreach ($variations as $variation) {
+                            if (isset($variation['variation_id'])) {
+                                $variation_id = (int) $variation['variation_id'];
+                                $variation_event_id = Meta_CAPI_WooCommerce::get_form_addtocart_event_id($variation_id);
+                                if (!empty($variation_event_id)) {
+                                    $addtocart_event_ids[(string) $variation_id] = $variation_event_id;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 $data['product'] = [
                     'id' => (string) $product->get_id(),
                     'name' => $product->get_name(),
                     'price' => (float) $product->get_price(),
                     'category' => implode(', ', $category_names),
                     'currency' => get_woocommerce_currency(),
+                    'viewcontent_event_id' => $viewcontent_event_id, // Pass to browser for Pixel tracking.
+                    'addtocart_event_id' => $addtocart_event_id, // Pass to browser for traditional form submissions.
+                    'addtocart_event_ids' => $addtocart_event_ids, // Pass variation event IDs if available.
                 ];
             }
         }
@@ -430,12 +485,20 @@ class Meta_CAPI_Scripts {
                     }
                 }
 
+                // Get InitiateCheckout event ID (generated early in template_redirect).
+                // This ensures both Pixel and CAPI use the SAME event ID.
+                $initiatecheckout_event_id = '';
+                if (class_exists('Meta_CAPI_WooCommerce')) {
+                    $initiatecheckout_event_id = Meta_CAPI_WooCommerce::get_initiatecheckout_event_id();
+                }
+
                 $data['cart'] = [
                     'content_ids' => $content_ids,
                     'contents' => $contents,
                     'value' => (float) $cart->get_total('edit'),
                     'currency' => get_woocommerce_currency(),
                     'num_items' => $cart->get_cart_contents_count(),
+                    'initiatecheckout_event_id' => $initiatecheckout_event_id, // Pass to browser for Pixel tracking.
                 ];
             }
         }

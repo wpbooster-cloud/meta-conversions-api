@@ -319,7 +319,7 @@ class Meta_CAPI_System_Status {
         $response = wp_remote_head(
             home_url('/'),
             [
-                'timeout' => 10,
+                'timeout' => 3, // Reduced from 10s to 3s for better performance
                 'sslverify' => false,
                 'user-agent' => 'WordPress/' . get_bloginfo('version') . ' Meta-CAPI-Status',
             ]
@@ -414,7 +414,7 @@ class Meta_CAPI_System_Status {
         $response = wp_remote_get(
             $url,
             [
-                'timeout' => 15,
+                'timeout' => 3, // Reduced from 15s to 3s for better performance
                 'sslverify' => false,
                 'user-agent' => 'WordPress/' . get_bloginfo('version') . ' Meta-CAPI-CacheTest',
             ]
