@@ -445,3 +445,103 @@ hr {
     outline-offset: 2px;
 }
 
+/* Error Notifications Section - Visual Grouping */
+#error-notifications {
+    background: #f9f9f9;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 20px;
+    margin: 20px 0;
+}
+
+#error-notifications .form-table {
+    margin: 0;
+    background: transparent;
+}
+
+#error-notifications .form-table th,
+#error-notifications .form-table td {
+    padding: 12px 0;
+}
+
+/* Email Validation Indicator */
+.meta-capi-email-validation {
+    position: relative;
+    display: inline-block;
+    width: 100%;
+    max-width: 500px;
+}
+
+.meta-capi-email-validation input[type="email"] {
+    padding-right: 35px;
+}
+
+.meta-capi-email-checkmark {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #00a32a;
+    font-size: 18px;
+    line-height: 1;
+    display: none !important;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.meta-capi-email-checkmark.valid {
+    display: block !important;
+    opacity: 1;
+}
+
+/* Test Notification Success Message */
+.meta-capi-test-success {
+    display: inline-block;
+    margin-left: 10px;
+    padding: 4px 8px;
+    background: #00a32a;
+    color: #fff;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 500;
+    opacity: 0;
+    transform: translateX(-10px);
+    transition: all 0.3s ease;
+}
+
+.meta-capi-test-success.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+/* Threshold Helper Text */
+.meta-capi-threshold-helper {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 6px;
+    background: #f0f6fc;
+    color: #2271b1;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* Help Link Styling */
+.meta-capi-help-link {
+    margin-left: 8px;
+    font-size: 13px;
+    text-decoration: none;
+    color: #2271b1;
+}
+
+.meta-capi-help-link:hover {
+    color: #135e96;
+    text-decoration: underline;
+}
+
+.meta-capi-help-link:focus {
+    outline: 1px solid #2271b1;
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+

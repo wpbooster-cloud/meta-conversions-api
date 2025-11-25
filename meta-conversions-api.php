@@ -206,12 +206,9 @@ class Meta_CAPI {
         // Manual stats trigger via secret URL parameter (for testing).
         add_action('admin_init', [$this, 'maybe_send_stats_manually']);
 
-        // Redirect to settings page after activation.
-        add_action('admin_init', [$this, 'redirect_after_activation']);
-
         // Activation/Deactivation hooks.
-        register_activation_hook(META_CAPI_PLUGIN_FILE, [$this, 'activate']);
-        register_deactivation_hook(META_CAPI_PLUGIN_FILE, [$this, 'deactivate']);
+        register_activation_hook(META_CAPI_PLUGIN_FILE, [__CLASS__, 'activate_static']);
+        register_deactivation_hook(META_CAPI_PLUGIN_FILE, [__CLASS__, 'deactivate_static']);
     }
 
     /**
@@ -330,9 +327,24 @@ class Meta_CAPI {
     }
 
     /**
+     * Plugin activation (static wrapper for activation hook).
+     */
+    public static function activate_static(): void {
+        $instance = self::get_instance();
+        $instance->activate();
+    }
+
+    /**
      * Plugin activation.
      */
     public function activate(): void {
+        // CRITICAL: Set skip tracking transient FIRST, before any other operations.
+        // This prevents any server events from being sent during activation.
+        // Extended cooldown: 30 seconds to cover activation, redirect, and any follow-up requests.
+        if (function_exists('set_transient')) {
+            set_transient('meta_capi_skip_tracking_after_activation', true, 30);
+        }
+        
         // Set default options ONLY if they don't already exist.
         // add_option() only adds if option doesn't exist, but we explicitly check to be extra safe.
         // This prevents any possibility of overwriting existing settings during re-activation.
@@ -378,9 +390,16 @@ class Meta_CAPI {
 
         // Flush rewrite rules.
         flush_rewrite_rules();
+        
+        // Note: Skip tracking transient is set at the very beginning of activate() to prevent any events.
+    }
 
-        // Set flag to redirect to settings page after activation.
-        set_transient('meta_capi_redirect_after_activation', true, 30);
+    /**
+     * Plugin deactivation (static wrapper for deactivation hook).
+     */
+    public static function deactivate_static(): void {
+        $instance = self::get_instance();
+        $instance->deactivate();
     }
 
     /**
@@ -408,27 +427,6 @@ class Meta_CAPI {
      */
     public function cleanup_old_logs(): void {
         $this->logger->clear_old_logs(30); // Keep logs for 30 days.
-    }
-
-    /**
-     * Redirect to settings page after plugin activation.
-     */
-    public function redirect_after_activation(): void {
-        // Only redirect if flag is set and user has permissions.
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-
-        // Check if we should redirect (set during activation).
-        if (get_transient('meta_capi_redirect_after_activation')) {
-            delete_transient('meta_capi_redirect_after_activation');
-
-            // Only redirect if this is a single plugin activation (not bulk).
-            if (isset($_GET['activate']) && !isset($_GET['activate-multi'])) {
-                wp_safe_redirect(admin_url('options-general.php?page=meta-conversions-api'));
-                exit;
-            }
-        }
     }
 
     /**
@@ -657,6 +655,19 @@ class Meta_CAPI {
         if (isset($_GET['meta_capi_ping_stats']) && 
             sanitize_text_field(wp_unslash($_GET['meta_capi_ping_stats'])) === 'wpbooster2024' &&
             current_user_can('manage_options')) {
+            
+            // Check if analytics are disabled before attempting to send.
+            if (get_option('meta_capi_disable_stats', false)) {
+                wp_die(
+                    '<h1>⚠️ Analytics Disabled</h1>' .
+                    '<p>Anonymous usage analytics are currently disabled in your plugin settings.</p>' .
+                    '<p>To enable analytics, go to <strong>Settings → Meta Conversions API</strong> and uncheck "Disable Anonymous Analytics".</p>' .
+                    '<p><a href="' . esc_url(admin_url('options-general.php?page=meta-conversions-api')) . '">← Back to Settings</a></p>',
+                    'Analytics Disabled',
+                    ['response' => 200]
+                );
+                return;
+            }
             
             $this->send_anonymous_stats();
             

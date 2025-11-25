@@ -252,11 +252,9 @@ class Meta_CAPI_Elementor {
         // Allow filtering by form ID.
         $event_data = apply_filters("meta_capi_form_submission_event_data_{$form_id}", $event_data, $record, $fields);
         
-        // CRITICAL: Extract timestamp from event_id to ensure exact match with browser Pixel timing.
-        // Event ID format: lead_{form_id}_{timestamp}_{random} where timestamp is in seconds.
-        // We use this timestamp for event_time to ensure perfect alignment with browser.
-        // The browser extracts this same timestamp from the event ID.
-        $event_data['event_time'] = $timestamp; // Use timestamp from event ID (already in seconds)
+        // Note: event_time is already set correctly at line 230.
+        // Filters can modify it if needed, but by default it uses the timestamp from event_id
+        // to ensure perfect alignment with browser Pixel timing.
 
         // Send the event via Conversions API (server-side).
         // NOTE: This works independently of browser pixel injection.

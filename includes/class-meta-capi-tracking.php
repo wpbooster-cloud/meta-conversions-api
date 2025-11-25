@@ -195,6 +195,32 @@ class Meta_CAPI_Tracking {
      * Track page view event.
      */
     public function track_page_view(): void {
+        // CRITICAL: Skip tracking during plugin activation and for a cooldown period after.
+        // This must be checked VERY EARLY to prevent any events during activation.
+        // Check this BEFORE any other operations, including logger calls.
+        $skip_tracking_transient = get_transient('meta_capi_skip_tracking_after_activation');
+        if ($skip_tracking_transient) {
+            if (isset($this->logger)) {
+                $this->logger->log('PageView skipped - plugin activation cooldown period', 'info', [
+                    'note' => 'Skipping tracking during activation/redirect process',
+                    'transient_active' => true,
+                ]);
+            }
+            return;
+        }
+        
+        // CRITICAL: Skip tracking if plugin is not configured (no credentials set).
+        // This prevents events from being sent during activation or before setup.
+        // Check if client is available before calling is_configured().
+        if (!isset($this->client) || !$this->client->is_configured()) {
+            if (isset($this->logger)) {
+                $this->logger->log('PageView skipped - plugin not configured (missing Pixel ID or Access Token)', 'info', [
+                    'note' => 'Tracking disabled until credentials are set in settings',
+                ]);
+            }
+            return;
+        }
+        
         // CRITICAL: Check admin user FIRST, before setting static flag or any other checks.
         // This prevents admin users from being tracked when viewing the frontend.
         // Note: is_admin() only returns true for admin dashboard pages, not when admin views frontend.

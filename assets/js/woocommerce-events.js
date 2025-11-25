@@ -222,8 +222,8 @@
                     // - content_ids must be strings (server sends ["36"], not [36])
                     // - content_name must match server exactly (no "Add to cart: " prefix)
                     // - contents array must be included to match server format
-                    // CRITICAL: Pass eventID for deduplication.
-                    // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
+                    // CRITICAL: Pass eventID and eventTime for deduplication.
+                    // eventTime must match server-side event_time exactly (extracted from event_id).
                     fbq('track', 'AddToCart', {
                         content_ids: [String(productData.id)], // Convert to string to match server format
                         content_name: productData.name, // Use server-provided name (clean, no prefix)
@@ -236,7 +236,8 @@
                         value: productData.price * quantity,
                         currency: currency
                     }, {
-                        eventID: eventId
+                        eventID: eventId,
+                        eventTime: eventTime
                     });
 
                     console.log('[Meta CAPI Debug] AddToCart event tracked (AJAX) - FULL PAYLOAD', {
@@ -299,8 +300,8 @@
                         return Math.floor(Date.now() / 1000);
                     })();
 
-                    // CRITICAL: Pass eventID for deduplication.
-                    // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
+                    // CRITICAL: Pass eventID and eventTime for deduplication.
+                    // eventTime must match server-side event_time exactly (extracted from event_id).
                     fbq('track', 'AddToCart', {
                         content_ids: [variationId || productData.id],
                         content_name: productData.name,
@@ -308,7 +309,8 @@
                         value: productData.price * quantity,
                         currency: productData.currency
                     }, {
-                        eventID: eventId
+                        eventID: eventId,
+                        eventTime: eventTime
                     });
 
                     console.log('Meta CAPI: AddToCart event tracked (Form)', {
@@ -375,8 +377,8 @@
                 // Get user agent (Meta Pixel automatically includes this in user_data).
                 var userAgent = navigator.userAgent || 'unknown';
                 
-                // CRITICAL: Pass eventID for deduplication.
-                // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
+                // CRITICAL: Pass eventID and eventTime for deduplication.
+                // eventTime must match server-side event_time exactly (extracted from event_id).
                 // CRITICAL: Include content_name to match server-side format for deduplication.
                 fbq('track', 'InitiateCheckout', {
                     content_ids: cartData.content_ids || [],
@@ -387,7 +389,8 @@
                     currency: cartData.currency,
                     num_items: cartData.num_items || 0
                 }, {
-                    eventID: eventId
+                    eventID: eventId,
+                    eventTime: eventTime
                 });
 
                 console.log('[Meta CAPI Debug] InitiateCheckout event tracked - FULL PAYLOAD', {
@@ -495,10 +498,11 @@
                     return;
                 }
 
-                // CRITICAL: Pass eventID for deduplication.
-                // Let Meta Pixel use its own timing (it will match server's event_time from order creation).
+                // CRITICAL: Pass eventID and eventTime for deduplication.
+                // eventTime must match server-side event_time exactly (order creation time).
                 fbq('track', 'Purchase', purchaseData, {
-                    eventID: eventId
+                    eventID: eventId,
+                    eventTime: eventTime
                 });
 
                 console.log('[Meta CAPI Debug] Purchase event tracked - FULL PAYLOAD', {

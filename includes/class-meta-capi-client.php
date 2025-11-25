@@ -628,7 +628,8 @@ class Meta_CAPI_Client {
             $recent_errors,
             $failures,
             $settings_url,
-            $troubleshooting_url
+            $troubleshooting_url,
+            false // is_test = false
         );
         
         // Set content type for HTML email.
@@ -636,11 +637,52 @@ class Meta_CAPI_Client {
             return 'text/html';
         });
         
+        // Set from address to admin email (required for Elastic Email and other SMTP services).
+        $admin_email = get_option('admin_email');
+        $site_name = get_bloginfo('name');
+        
+        add_filter('wp_mail_from', function($from_email) use ($admin_email) {
+            return $admin_email;
+        });
+        
+        add_filter('wp_mail_from_name', function($from_name) use ($site_name) {
+            return $site_name;
+        });
+        
+        // Log email details before sending for debugging.
+        $this->logger->info('Attempting to send failure notification email', [
+            'to' => $notification_email,
+            'from' => $admin_email,
+            'from_name' => $site_name,
+            'subject' => $subject,
+            'message_length' => strlen($message),
+        ]);
+        
+        // Capture PHPMailer errors if available.
+        global $phpmailer;
+        $phpmailer_errors = [];
+        
+        // Hook into wp_mail_failed to capture errors.
+        $error_callback = function($wp_error) use (&$phpmailer_errors) {
+            $phpmailer_errors[] = $wp_error->get_error_message();
+        };
+        add_action('wp_mail_failed', $error_callback);
+        
         // Send email.
         $sent = wp_mail($notification_email, $subject, $message);
         
-        // Reset content type.
+        // Capture PHPMailer errors if available.
+        if (isset($phpmailer) && is_wp_error($phpmailer->ErrorInfo)) {
+            $phpmailer_errors[] = $phpmailer->ErrorInfo;
+        } elseif (isset($phpmailer) && !empty($phpmailer->ErrorInfo)) {
+            $phpmailer_errors[] = $phpmailer->ErrorInfo;
+        }
+        
+        // Reset filters and actions.
         remove_all_filters('wp_mail_content_type');
+        remove_all_filters('wp_mail_from');
+        remove_all_filters('wp_mail_from_name');
+        remove_action('wp_mail_failed', $error_callback);
         
         if ($sent) {
             // Mark alert as sent (expires in 24 hours)
@@ -650,6 +692,17 @@ class Meta_CAPI_Client {
             $this->logger->info('Admin notification sent for API failures', [
                 'failure_count' => $failure_count,
                 'notification_email' => $notification_email,
+                'from_email' => $admin_email,
+                'from_name' => $site_name,
+            ]);
+        } else {
+            // Log failure with error details.
+            $this->logger->error('Failed to send failure notification email', [
+                'notification_email' => $notification_email,
+                'from_email' => $admin_email,
+                'from_name' => $site_name,
+                'phpmailer_errors' => $phpmailer_errors,
+                'wp_mail_returned' => $sent,
             ]);
         }
     }
@@ -665,6 +718,7 @@ class Meta_CAPI_Client {
      * @param array  $all_failures All failure details.
      * @param string $settings_url Settings page URL.
      * @param string $troubleshooting_url Troubleshooting page URL.
+     * @param bool   $is_test Whether this is a test email.
      * @return string HTML email content.
      */
     private function build_failure_email_html(
@@ -675,7 +729,8 @@ class Meta_CAPI_Client {
         array $recent_errors,
         array $all_failures,
         string $settings_url,
-        string $troubleshooting_url
+        string $troubleshooting_url,
+        bool $is_test = false
     ): string {
         ob_start();
         ?>
@@ -688,6 +743,11 @@ class Meta_CAPI_Client {
         </head>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
             <div style="background-color: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <?php if ($is_test): ?>
+                    <div style="background-color: #2271b1; color: #ffffff; padding: 15px; border-radius: 4px; margin-bottom: 20px; text-align: center; font-weight: 600;">
+                        <?php esc_html_e('🧪 TEST EMAIL - This is a test notification to verify your email settings are working correctly.', 'meta-conversions-api'); ?>
+                    </div>
+                <?php endif; ?>
                 
                 <h1 style="color: #d63638; margin-top: 0; font-size: 24px; border-bottom: 2px solid #d63638; padding-bottom: 10px;">
                     <?php echo esc_html__('Meta Pixel & Conversions API: Connection Issues Detected', 'meta-conversions-api'); ?>
@@ -839,6 +899,205 @@ class Meta_CAPI_Client {
         </html>
         <?php
         return ob_get_clean();
+    }
+    
+    /**
+     * Send a test notification email (for testing purposes).
+     * This bypasses the threshold and 24-hour limit.
+     *
+     * @return array Result with success status and message.
+     */
+    public function send_test_notification(): array {
+        // Check if notifications are enabled.
+        if (!get_option('meta_capi_enable_error_notifications', true)) {
+            return [
+                'success' => false,
+                'message' => __('Error notifications are disabled. Enable them in settings to test.', 'meta-conversions-api'),
+            ];
+        }
+        
+        // Create sample failure data for testing.
+        $sample_failures = [
+            [
+                'timestamp' => current_time('mysql'),
+                'event_name' => 'PageView',
+                'error' => 'Invalid access token',
+                'response_code' => 401,
+            ],
+            [
+                'timestamp' => current_time('mysql'),
+                'event_name' => 'Purchase',
+                'error' => 'Invalid access token',
+                'response_code' => 401,
+            ],
+            [
+                'timestamp' => current_time('mysql'),
+                'event_name' => 'AddToCart',
+                'error' => 'Request timeout',
+                'response_code' => 0,
+            ],
+            [
+                'timestamp' => current_time('mysql'),
+                'event_name' => 'Lead',
+                'error' => 'Invalid Dataset ID',
+                'response_code' => 400,
+            ],
+            [
+                'timestamp' => current_time('mysql'),
+                'event_name' => 'PageView',
+                'error' => 'Invalid access token',
+                'response_code' => 401,
+            ],
+        ];
+        
+        // Group failures by event type and error message (same logic as real notification).
+        $event_summary = [];
+        $unique_errors = [];
+        
+        foreach ($sample_failures as $failure) {
+            $event_type = $failure['event_name'] ?? 'Unknown';
+            if (!isset($event_summary[$event_type])) {
+                $event_summary[$event_type] = 0;
+            }
+            $event_summary[$event_type]++;
+            
+            $error_key = $failure['error'];
+            if (!isset($unique_errors[$error_key])) {
+                $unique_errors[$error_key] = [
+                    'error' => $failure['error'],
+                    'response_code' => $failure['response_code'],
+                    'count' => 0,
+                ];
+            }
+            $unique_errors[$error_key]['count']++;
+        }
+        
+        // Get recent unique errors (last 5).
+        $recent_errors = array_slice($unique_errors, -5, 5, true);
+        
+        // Send the test notification (bypassing normal threshold checks).
+        $site_name = get_bloginfo('name');
+        $site_url = home_url();
+        $domain = wp_parse_url($site_url, PHP_URL_HOST);
+        $settings_url = admin_url('options-general.php?page=meta-conversions-api');
+        $troubleshooting_url = admin_url('options-general.php?page=meta-conversions-api&tab=troubleshooting');
+        
+        $subject = sprintf(
+            /* translators: 1: Site name, 2: Domain */
+            __('[TEST] [%1$s - %2$s] Meta Pixel & Conversions API: Connection Issues Detected', 'meta-conversions-api'),
+            $site_name,
+            $domain
+        );
+        
+        // Build HTML email (with test flag).
+        $message = $this->build_failure_email_html(
+            $site_name,
+            $domain,
+            count($sample_failures),
+            $event_summary,
+            $recent_errors,
+            $sample_failures,
+            $settings_url,
+            $troubleshooting_url,
+            true // is_test = true
+        );
+        
+        // Get notification email (or default to admin email).
+        $notification_email = get_option('meta_capi_notification_email', '');
+        if (empty($notification_email) || !is_email($notification_email)) {
+            $notification_email = get_option('admin_email');
+        }
+        
+        // Set content type for HTML email.
+        add_filter('wp_mail_content_type', function() {
+            return 'text/html';
+        });
+        
+        // Set from address to admin email (required for Elastic Email and other SMTP services).
+        $admin_email = get_option('admin_email');
+        $site_name = get_bloginfo('name');
+        
+        add_filter('wp_mail_from', function($from_email) use ($admin_email) {
+            return $admin_email;
+        });
+        
+        add_filter('wp_mail_from_name', function($from_name) use ($site_name) {
+            return $site_name;
+        });
+        
+        // Log email details before sending for debugging.
+        $this->logger->info('Attempting to send test notification email', [
+            'to' => $notification_email,
+            'from' => $admin_email,
+            'from_name' => $site_name,
+            'subject' => $subject,
+            'message_length' => strlen($message),
+        ]);
+        
+        // Capture PHPMailer errors if available.
+        global $phpmailer;
+        $phpmailer_errors = [];
+        
+        // Hook into wp_mail_failed to capture errors.
+        $error_callback = function($wp_error) use (&$phpmailer_errors) {
+            $phpmailer_errors[] = $wp_error->get_error_message();
+        };
+        add_action('wp_mail_failed', $error_callback);
+        
+        // Send email.
+        $sent = wp_mail($notification_email, $subject, $message);
+        
+        // Capture PHPMailer errors if available.
+        if (isset($phpmailer) && is_wp_error($phpmailer->ErrorInfo)) {
+            $phpmailer_errors[] = $phpmailer->ErrorInfo;
+        } elseif (isset($phpmailer) && !empty($phpmailer->ErrorInfo)) {
+            $phpmailer_errors[] = $phpmailer->ErrorInfo;
+        }
+        
+        // Reset filters and actions.
+        remove_all_filters('wp_mail_content_type');
+        remove_all_filters('wp_mail_from');
+        remove_all_filters('wp_mail_from_name');
+        remove_action('wp_mail_failed', $error_callback);
+        
+        if ($sent) {
+            $this->logger->info('Test notification email sent successfully', [
+                'notification_email' => $notification_email,
+                'from_email' => $admin_email,
+                'from_name' => $site_name,
+            ]);
+            
+            return [
+                'success' => true,
+                'message' => sprintf(
+                    /* translators: %s: Email address */
+                    __('Test notification email sent successfully to %s', 'meta-conversions-api'),
+                    $notification_email
+                ),
+            ];
+        } else {
+            $error_message = !empty($phpmailer_errors) 
+                ? implode('; ', $phpmailer_errors)
+                : __('Unknown error - wp_mail returned false', 'meta-conversions-api');
+            
+            $this->logger->error('Failed to send test notification email', [
+                'notification_email' => $notification_email,
+                'from_email' => $admin_email,
+                'from_name' => $site_name,
+                'phpmailer_errors' => $phpmailer_errors,
+                'wp_mail_returned' => $sent,
+                'error_message' => $error_message,
+            ]);
+            
+            return [
+                'success' => false,
+                'message' => sprintf(
+                    /* translators: %s: Error message */
+                    __('Failed to send test notification email: %s', 'meta-conversions-api'),
+                    $error_message
+                ),
+            ];
+        }
     }
 }
 

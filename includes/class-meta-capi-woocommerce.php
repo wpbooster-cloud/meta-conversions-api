@@ -321,11 +321,12 @@ class Meta_CAPI_WooCommerce {
      * @return array<string, mixed> Event data array.
      */
     private function build_purchase_event_data(WC_Order $order): array {
-        // CRITICAL: Use current time (thank-you page load) to match browser Pixel timing.
-        // Browser fires Purchase event immediately on thank-you page load.
-        // Using current time ensures exact matching for deduplication.
-        // Note: Order creation time may be significantly earlier if there's a delay between checkout and thank-you page.
-        $event_time = time();
+        // CRITICAL: Use order creation timestamp to match browser Pixel timing.
+        // Browser receives order_timestamp from scripts.php (line 568) and uses it for eventTime.
+        // Server must use the same order creation timestamp for deduplication to work.
+        // The browser extracts this from orderData.event_time which comes from order creation time.
+        $order_date = $order->get_date_created();
+        $event_time = $order_date ? $order_date->getTimestamp() : time();
         
         // Build user data BEFORE creating event data (capture at request time).
         $user_data = $this->build_user_data($order);
@@ -366,7 +367,6 @@ class Meta_CAPI_WooCommerce {
             'custom_data'      => $this->build_custom_data($order),
         ];
 
-        $order_date = $order->get_date_created();
         $this->logger->log('Purchase event data prepared', 'debug', [
             'order_id' => $order->get_id(),
             'event_time' => $event_time,
@@ -374,7 +374,7 @@ class Meta_CAPI_WooCommerce {
             'order_date' => $order_date ? $order_date->format('Y-m-d H:i:s') : 'not available',
             'order_date_timestamp' => $order_date ? $order_date->getTimestamp() : 'not available',
             'time_difference_seconds' => $order_date ? ($event_time - $order_date->getTimestamp()) : 'N/A',
-            'note' => 'Using current time (thank-you page load) to match browser Pixel timing',
+            'note' => 'Using order creation timestamp to match browser Pixel timing (browser receives order_timestamp from scripts.php)',
         ]);
 
         return $event_data;
@@ -612,27 +612,20 @@ class Meta_CAPI_WooCommerce {
                 $this->logger->log('InitiateCheckout event ID generated in fallback', 'warning', ['event_id' => $event_id]);
             }
 
-            // CRITICAL: Use current time (not extracted from event_id) to match browser Pixel timing.
-            // Browser fires immediately on checkout page load, so server should use current time.
-            // Event ID contains timestamp for browser extraction, but event_time should be current
-            // to match Meta Pixel's immediate firing (similar to Lead event pattern which works consistently).
-            // Note: Event ID timestamp is still used by browser for extraction, but server event_time
-            // uses current time to ensure exact matching with browser's immediate firing.
-            $event_time = time();
+            // CRITICAL: Extract timestamp from event_id to match browser Pixel timing exactly.
+            // Browser extracts timestamp from event_id (lines 353-364 in woocommerce-events.js) and uses it for eventTime.
+            // Server must extract the same timestamp from event_id to ensure exact matching for deduplication.
+            // Event ID format: checkout_{session_id}_{timestamp_ms} where timestamp is in milliseconds.
+            // We extract this and convert to seconds to match browser's extraction.
+            $event_time = $this->extract_timestamp_from_event_id($event_id);
             
-            // Log extracted timestamp for comparison (for debugging).
-            $extracted_time = $this->extract_timestamp_from_event_id($event_id);
-            if ($extracted_time > 0) {
-                $time_diff = $event_time - $extracted_time;
-                if (abs($time_diff) > 5) {
-                    $this->logger->log('InitiateCheckout: Using current time instead of extracted timestamp (Lead pattern)', 'info', [
-                        'event_id' => $event_id,
-                        'event_time_current' => $event_time,
-                        'event_time_extracted' => $extracted_time,
-                        'time_difference_seconds' => $time_diff,
-                        'note' => 'Using current time to match browser immediate firing (like Lead events)',
-                    ]);
-                }
+            // Fallback to current time if extraction fails (shouldn't happen).
+            if ($event_time === 0) {
+                $event_time = time();
+                $this->logger->log('InitiateCheckout: Failed to extract timestamp from event_id, using current time', 'warning', [
+                    'event_id' => $event_id,
+                    'event_time' => $event_time,
+                ]);
             }
 
             // Build user data BEFORE creating event data (capture at request time).
@@ -757,28 +750,28 @@ class Meta_CAPI_WooCommerce {
             // Traditional form submissions use pre-generated IDs from product page.
             self::$addtocart_event_ids[(string) $effective_product_id] = $event_id;
 
-            // CRITICAL: Use current time (not extracted from event_id) to match browser Pixel timing.
-            // Browser fires immediately when add-to-cart button is clicked, so server should use current time.
-            // Event ID contains timestamp for browser extraction, but event_time should be current
-            // to match Meta Pixel's immediate firing (similar to Lead event pattern which works consistently).
-            // Note: Event ID timestamp is still used by browser for extraction, but server event_time
-            // uses current time to ensure exact matching with browser's immediate firing.
-            $event_time = time();
+            // CRITICAL: Extract timestamp from event_id to match browser Pixel timing exactly.
+            // Browser extracts timestamp from event_id (lines 208-219 in woocommerce-events.js) and uses it for eventTime.
+            // Server must extract the same timestamp from event_id to ensure exact matching for deduplication.
+            // Event ID format: addtocart_{product_id}_{timestamp_ms} where timestamp is in milliseconds.
+            // We extract this and convert to seconds to match browser's extraction.
+            $event_time = $this->extract_timestamp_from_event_id($event_id);
+            
+            // Fallback to current time if extraction fails (shouldn't happen).
+            if ($event_time === 0) {
+                $event_time = time();
+                $this->logger->log('AddToCart: Failed to extract timestamp from event_id, using current time', 'warning', [
+                    'event_id' => $event_id,
+                    'event_time' => $event_time,
+                ]);
+            }
             
             // Log extracted timestamp for comparison (for debugging).
-            $extracted_time = $this->extract_timestamp_from_event_id($event_id);
-            if ($extracted_time > 0) {
-                $time_diff = $event_time - $extracted_time;
-                if (abs($time_diff) > 5) {
-                    $this->logger->log('AddToCart: Using current time instead of extracted timestamp (Lead pattern)', 'info', [
-                        'event_id' => $event_id,
-                        'event_time_current' => $event_time,
-                        'event_time_extracted' => $extracted_time,
-                        'time_difference_seconds' => $time_diff,
-                        'note' => 'Using current time to match browser immediate firing (like Lead events)',
-                    ]);
-                }
-            }
+            $this->logger->log('AddToCart: Using extracted timestamp from event_id', 'debug', [
+                'event_id' => $event_id,
+                'event_time_extracted' => $event_time,
+                'note' => 'Browser extracts same timestamp from event_id - they must match for deduplication',
+            ]);
 
             // CRITICAL: Use HTTP_REFERER for AJAX requests to match browser's window.location.href exactly.
             // Browser Pixel uses window.location.href (the page where button was clicked), not the AJAX endpoint.

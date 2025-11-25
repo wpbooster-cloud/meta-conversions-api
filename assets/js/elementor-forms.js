@@ -129,10 +129,11 @@
                 return Math.floor(Date.now() / 1000);
             })();
 
-            // CRITICAL: Pass eventID for deduplication.
-            // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
+            // CRITICAL: Pass eventID and eventTime for deduplication.
+            // eventTime must match server-side event_time exactly (extracted from event_id).
             fbq('track', 'Lead', customData, {
-                eventID: eventId
+                eventID: eventId,
+                eventTime: eventTime
             });
         }
 

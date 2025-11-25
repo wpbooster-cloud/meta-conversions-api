@@ -22,6 +22,9 @@ class Meta_CAPI_Settings {
     public function __construct() {
         add_action('admin_menu', [$this, 'add_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
+        
+        // Log POST data early for debugging test notification form submission.
+        add_action('admin_init', [$this, 'log_post_data_early'], 1);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
         add_action('wp_ajax_meta_capi_search_pages', [$this, 'ajax_search_pages']);
         add_action('wp_ajax_meta_capi_search_forms', [$this, 'ajax_search_forms']);
@@ -356,7 +359,7 @@ class Meta_CAPI_Settings {
         // Error notification fields.
         add_settings_field(
             'meta_capi_error_notifications',
-            __('Error Notifications', 'meta-conversions-api'),
+            '', // No label - section title is sufficient
             [$this, 'render_error_notifications_field'],
             'meta-conversions-api',
             'meta_capi_advanced'
@@ -495,6 +498,28 @@ class Meta_CAPI_Settings {
     }
 
     /**
+     * Log POST data early in admin_init for debugging.
+     */
+    public function log_post_data_early(): void {
+        // Only log on our settings page.
+        if (!isset($_GET['page']) || $_GET['page'] !== 'meta-conversions-api') {
+            return;
+        }
+        
+        if (!empty($_POST)) {
+            $logger = new Meta_CAPI_Logger();
+            $logger->info('Early POST data logging (admin_init hook)', [
+                'post_keys' => array_keys($_POST),
+                'has_test_connection' => isset($_POST['test_connection']),
+                'has_test_notification' => isset($_POST['test_notification']),
+                'has_test_notification_nonce' => isset($_POST['_test_notification_nonce']),
+                'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'unknown',
+                'request_uri' => $_SERVER['REQUEST_URI'] ?? 'unknown',
+            ]);
+        }
+    }
+
+    /**
      * Render settings page.
      */
     public function render_settings_page(): void {
@@ -502,9 +527,102 @@ class Meta_CAPI_Settings {
             return;
         }
 
+        // Log all POST data for debugging (before any processing).
+        if (!empty($_POST)) {
+            $logger = new Meta_CAPI_Logger();
+            $logger->info('Settings page POST data received', [
+                'post_keys' => array_keys($_POST),
+                'has_test_connection' => isset($_POST['test_connection']),
+                'has_test_notification' => isset($_POST['test_notification']),
+                'has_test_notification_nonce' => isset($_POST['_test_notification_nonce']),
+            ]);
+        }
+
         // Test connection if requested.
-        if (isset($_POST['test_connection']) && check_admin_referer('meta_capi_test_connection')) {
+        // Process BEFORE settings_fields() to avoid nonce conflicts.
+        if (isset($_POST['test_connection'])) {
+            // Use the custom nonce field name to avoid conflicts with main form.
+            $nonce = isset($_POST['_test_connection_nonce']) ? sanitize_text_field(wp_unslash($_POST['_test_connection_nonce'])) : '';
+            if (!wp_verify_nonce($nonce, 'meta_capi_test_connection')) {
+                wp_die(__('Security check failed. The link you followed may have expired. Please refresh the page and try again.', 'meta-conversions-api'));
+            }
             $this->test_connection();
+        }
+        
+        // Test notification email if requested.
+        // Process BEFORE settings_fields() to avoid nonce conflicts.
+        if (isset($_POST['test_notification'])) {
+            $logger = new Meta_CAPI_Logger();
+            $logger->info('Test notification POST detected', [
+                'has_nonce' => isset($_POST['_test_notification_nonce']),
+                'nonce_value' => isset($_POST['_test_notification_nonce']) ? substr(sanitize_text_field(wp_unslash($_POST['_test_notification_nonce'])), 0, 10) . '...' : 'missing',
+                'post_keys' => array_keys($_POST),
+            ]);
+            
+            // Use the custom nonce field name to avoid conflicts with main form.
+            $nonce = isset($_POST['_test_notification_nonce']) ? sanitize_text_field(wp_unslash($_POST['_test_notification_nonce'])) : '';
+            $nonce_valid = wp_verify_nonce($nonce, 'meta_capi_test_notification');
+            
+            $logger->info('Nonce verification result', [
+                'nonce_provided' => !empty($nonce),
+                'nonce_valid' => $nonce_valid,
+            ]);
+            
+            if (!$nonce_valid) {
+                $logger->error('Test notification nonce verification failed', [
+                    'nonce_provided' => !empty($nonce),
+                    'nonce_length' => strlen($nonce),
+                ]);
+                wp_die(__('Security check failed. The link you followed may have expired. Please refresh the page and try again.', 'meta-conversions-api'));
+            }
+            
+            // Save notification settings first (if provided) so test uses current form values.
+            // Check if the value is '1' (checked) or empty string (unchecked).
+            $enabled_value = isset($_POST['meta_capi_enable_error_notifications']) ? sanitize_text_field(wp_unslash($_POST['meta_capi_enable_error_notifications'])) : '';
+            $enabled_bool = ($enabled_value === '1');
+            update_option('meta_capi_enable_error_notifications', $enabled_bool);
+            
+            if (isset($_POST['meta_capi_notification_email'])) {
+                $email = sanitize_email(wp_unslash($_POST['meta_capi_notification_email']));
+                if (is_email($email)) {
+                    update_option('meta_capi_notification_email', $email);
+                }
+            }
+            
+            if (isset($_POST['meta_capi_notification_threshold'])) {
+                $threshold = absint($_POST['meta_capi_notification_threshold']);
+                if ($threshold >= 1 && $threshold <= 50) {
+                    update_option('meta_capi_notification_threshold', $threshold);
+                }
+            }
+            
+            // Log that we're attempting to send test notification.
+            $logger = new Meta_CAPI_Logger();
+            $logger->info('Test notification email requested', [
+                'post_data' => [
+                    'enabled_value' => $enabled_value,
+                    'enabled_bool' => $enabled_bool,
+                    'email' => isset($_POST['meta_capi_notification_email']) ? sanitize_email(wp_unslash($_POST['meta_capi_notification_email'])) : 'not_provided',
+                    'threshold' => isset($_POST['meta_capi_notification_threshold']) ? absint($_POST['meta_capi_notification_threshold']) : 'not_provided',
+                ],
+                'saved_settings' => [
+                    'enabled' => get_option('meta_capi_enable_error_notifications', false),
+                    'email' => get_option('meta_capi_notification_email', ''),
+                    'threshold' => get_option('meta_capi_notification_threshold', 5),
+                ],
+            ]);
+            
+            // Check if notifications are enabled before sending test.
+            if (!$enabled_bool) {
+                set_transient('meta_capi_test_notification_result', [
+                    'type' => 'error',
+                    'message' => __('Error notifications must be enabled to send a test email. Please check the "Enable Email Notifications" checkbox first.', 'meta-conversions-api'),
+                ], 30);
+                wp_redirect(add_query_arg('test_notification_sent', '1', wp_get_referer()));
+                exit;
+            }
+            
+            $this->test_notification_email();
         }
 
         ?>
@@ -589,10 +707,10 @@ class Meta_CAPI_Settings {
 
                     <h2><?php esc_html_e('Test Connection', 'meta-conversions-api'); ?></h2>
                     <p><?php esc_html_e('Test your Facebook Conversions API connection by sending a test event.', 'meta-conversions-api'); ?></p>
-                    <form method="post">
-                        <?php wp_nonce_field('meta_capi_test_connection'); ?>
+                    <form method="post" action="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>" id="meta-capi-test-connection-form">
+                        <?php wp_nonce_field('meta_capi_test_connection', '_test_connection_nonce'); ?>
                         <input type="hidden" name="test_connection" value="1">
-                        <?php submit_button(__('Send Test Event', 'meta-conversions-api'), 'secondary', 'submit', false); ?>
+                        <?php submit_button(__('Send Test Event', 'meta-conversions-api'), 'secondary', 'submit', false, ['id' => 'test-connection-submit']); ?>
                     </form>
                 </div>
 
@@ -634,7 +752,7 @@ class Meta_CAPI_Settings {
      */
     public function render_advanced_section(): void {
         ?>
-        <p><?php esc_html_e('Error notification settings.', 'meta-conversions-api'); ?></p>
+        <p><?php esc_html_e('Configure email notifications to receive alerts when API connection issues are detected.', 'meta-conversions-api'); ?></p>
         <?php
     }
 
@@ -1425,7 +1543,7 @@ class Meta_CAPI_Settings {
                         <?php esc_html_e('Send email notifications when API connection issues are detected', 'meta-conversions-api'); ?>
                     </label>
                     <p class="description">
-                        <?php esc_html_e('You will receive an email when multiple API failures occur within a short time period.', 'meta-conversions-api'); ?>
+                        <?php esc_html_e('Receive email alerts when multiple API failures occur within a short time period. This helps you stay informed about connection issues.', 'meta-conversions-api'); ?>
                     </p>
                 </td>
             </tr>
@@ -1436,14 +1554,17 @@ class Meta_CAPI_Settings {
                     </label>
                 </th>
                 <td>
-                    <input
-                        type="email"
-                        name="meta_capi_notification_email"
-                        id="meta_capi_notification_email"
-                        value="<?php echo esc_attr($email); ?>"
-                        class="regular-text"
-                        placeholder="<?php echo esc_attr($admin_email); ?>"
-                    >
+                    <div class="meta-capi-email-validation">
+                        <input
+                            type="email"
+                            name="meta_capi_notification_email"
+                            id="meta_capi_notification_email"
+                            value="<?php echo esc_attr($email); ?>"
+                            class="regular-text"
+                            placeholder="<?php echo esc_attr($admin_email); ?>"
+                        >
+                        <span class="meta-capi-email-checkmark dashicons dashicons-yes-alt" id="meta-capi-email-checkmark"></span>
+                    </div>
                     <p class="description">
                         <?php
                         printf(
@@ -1452,6 +1573,9 @@ class Meta_CAPI_Settings {
                             esc_html($admin_email)
                         );
                         ?>
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=setup#error-notifications')); ?>" class="meta-capi-help-link">
+                            <?php esc_html_e('Learn more', 'meta-conversions-api'); ?>
+                        </a>
                     </p>
                 </td>
             </tr>
@@ -1471,21 +1595,111 @@ class Meta_CAPI_Settings {
                         max="50"
                         class="small-text"
                     >
+                    <span class="meta-capi-threshold-helper"><?php esc_html_e('Recommended: 5', 'meta-conversions-api'); ?></span>
                     <p class="description">
                         <?php esc_html_e('Number of failures in 1 hour before sending a notification. Default: 5. (Useful for testing: set to 2-3)', 'meta-conversions-api'); ?>
                     </p>
                 </td>
             </tr>
         </table>
+        
+        <?php
+        // Render test notification button as part of this section (but outside the form table).
+        // This keeps all email notification settings grouped together.
+        ?>
+        <div id="meta-capi-test-notification-row" style="margin-top: 15px; margin-bottom: 20px; <?php echo $enabled ? '' : 'display: none;'; ?>">
+            <form method="post" action="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>" id="meta-capi-test-notification-form" style="display: inline-block;">
+                <?php wp_nonce_field('meta_capi_test_notification', '_test_notification_nonce'); ?>
+                <input type="hidden" name="test_notification" value="1">
+                <!-- Hidden fields to capture current form values before submission -->
+                <input type="hidden" name="meta_capi_enable_error_notifications" id="test_notification_enabled" value="<?php echo $enabled ? '1' : ''; ?>">
+                <input type="hidden" name="meta_capi_notification_email" id="test_notification_email" value="<?php echo esc_attr($email); ?>">
+                <input type="hidden" name="meta_capi_notification_threshold" id="test_notification_threshold" value="<?php echo esc_attr($threshold); ?>">
+                <?php submit_button(__('Send Test Email', 'meta-conversions-api'), 'secondary', 'submit', false, ['id' => 'test-notification-submit']); ?>
+                <span class="meta-capi-test-success" id="meta-capi-test-success"><?php esc_html_e('Email sent!', 'meta-conversions-api'); ?></span>
+            </form>
+            <p class="description" style="margin-top: 8px; margin-bottom: 0;">
+                <?php esc_html_e('Send a test notification email to verify your email settings are working correctly.', 'meta-conversions-api'); ?>
+            </p>
+        </div>
         <script>
         (function($) {
-            $('#meta_capi_enable_error_notifications').on('change', function() {
-                if ($(this).is(':checked')) {
-                    $('#meta-capi-notification-settings-row, #meta-capi-threshold-row').show();
+            // Email validation with visual feedback.
+            function validateEmail(email) {
+                if (!email || email.trim() === '') {
+                    return false;
+                }
+                var re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                return re.test(email.trim());
+            }
+            
+            var checkmark = $('#meta-capi-email-checkmark');
+            
+            // Ensure checkmark is hidden initially
+            checkmark.removeClass('valid');
+            
+            // Validate email on input and blur
+            $('#meta_capi_notification_email').on('input blur', function() {
+                var email = $(this).val();
+                
+                if (email && validateEmail(email)) {
+                    checkmark.addClass('valid');
                 } else {
-                    $('#meta-capi-notification-settings-row, #meta-capi-threshold-row').hide();
+                    checkmark.removeClass('valid');
                 }
             });
+            
+            // Check email on page load if it has a value (only validate, don't show if invalid).
+            var initialEmail = $('#meta_capi_notification_email').val();
+            if (initialEmail && validateEmail(initialEmail)) {
+                checkmark.addClass('valid');
+            }
+            
+            // Update hidden fields with current form values before submitting test notification form.
+            $('#meta-capi-test-notification-form').on('submit', function(e) {
+                // Get current values from the main form fields.
+                var enabled = $('#meta_capi_enable_error_notifications').is(':checked') ? '1' : '';
+                var email = $('#meta_capi_notification_email').val() || '';
+                var threshold = $('#meta_capi_notification_threshold').val() || '5';
+                
+                // Update hidden fields in test form.
+                $('#test_notification_enabled').val(enabled);
+                $('#test_notification_email').val(email);
+                $('#test_notification_threshold').val(threshold);
+            });
+            
+            // Show success message only if there's a visible success notice for test notification.
+            // This ensures we only show it when a test email was actually just sent.
+            var successNotice = $('.notice-success').filter(function() {
+                var text = $(this).text().toLowerCase();
+                return text.indexOf('test notification') !== -1 || text.indexOf('notification email sent') !== -1;
+            });
+            
+            if (successNotice.length > 0 && successNotice.is(':visible')) {
+                var successMsg = $('#meta-capi-test-success');
+                if (successMsg.length) {
+                    setTimeout(function() {
+                        successMsg.addClass('show');
+                        setTimeout(function() {
+                            successMsg.removeClass('show');
+                        }, 4000);
+                    }, 300);
+                }
+            }
+            
+            // Show/hide notification settings when checkbox changes.
+            $('#meta_capi_enable_error_notifications').on('change', function() {
+                if ($(this).is(':checked')) {
+                    $('#meta-capi-notification-settings-row, #meta-capi-threshold-row, #meta-capi-test-notification-row').show();
+                } else {
+                    $('#meta-capi-notification-settings-row, #meta-capi-threshold-row, #meta-capi-test-notification-row').hide();
+                }
+            });
+            
+            // Show/hide test notification row on page load based on checkbox state.
+            if (!$('#meta_capi_enable_error_notifications').is(':checked')) {
+                $('#meta-capi-test-notification-row').hide();
+            }
         })(jQuery);
         </script>
         </div>
@@ -1577,14 +1791,25 @@ class Meta_CAPI_Settings {
     private function test_connection(): void {
         $client = new Meta_CAPI_Client(new Meta_CAPI_Logger());
         
+        // Generate unique event ID with "test_" prefix for easy identification.
+        $timestamp = time();
+        $random = wp_generate_password(12, false);
+        $event_id = 'test_pageview_' . $timestamp . '_' . $random;
+        
         $test_data = [
             'event_name' => 'PageView',
-            'event_time' => time(),
+            'event_time' => $timestamp,
+            'event_id' => $event_id,
             'action_source' => 'website',
             'event_source_url' => home_url('/'),
             'user_data' => [
                 'client_ip_address' => '127.0.0.1',
-                'client_user_agent' => 'Test User Agent',
+                'client_user_agent' => 'Test User Agent - WordPress Admin',
+            ],
+            'custom_data' => [
+                'test_event' => true,
+                'source' => 'wordpress_admin_test',
+                'test_type' => 'manual_test',
             ],
         ];
 
@@ -1593,7 +1818,11 @@ class Meta_CAPI_Settings {
         if ($result['success']) {
             set_transient('meta_capi_test_result', [
                 'type' => 'success',
-                'message' => __('Test event sent successfully! Check your Facebook Events Manager to verify.', 'meta-conversions-api')
+                'message' => sprintf(
+                    __('Test event sent successfully! Event ID: %s. Check your Facebook Events Manager to verify.', 'meta-conversions-api'),
+                    '<code>' . esc_html($event_id) . '</code>'
+                ),
+                'event_id' => $event_id,
             ], 30);
         } else {
             set_transient('meta_capi_test_result', [
@@ -1611,6 +1840,41 @@ class Meta_CAPI_Settings {
     }
 
     /**
+     * Test notification email.
+     */
+    private function test_notification_email(): void {
+        $logger = new Meta_CAPI_Logger();
+        $logger->info('test_notification_email() called', [
+            'enabled_setting' => get_option('meta_capi_enable_error_notifications', false),
+            'email_setting' => get_option('meta_capi_notification_email', ''),
+        ]);
+        
+        $client = new Meta_CAPI_Client($logger);
+        $result = $client->send_test_notification();
+        
+        $logger->info('Test notification result', [
+            'success' => $result['success'],
+            'message' => $result['message'],
+        ]);
+        
+        if ($result['success']) {
+            set_transient('meta_capi_test_notification_result', [
+                'type' => 'success',
+                'message' => $result['message'],
+            ], 30);
+        } else {
+            set_transient('meta_capi_test_notification_result', [
+                'type' => 'error',
+                'message' => $result['message'],
+            ], 30);
+        }
+        
+        // Redirect to avoid form resubmission
+        wp_redirect(add_query_arg('test_notification_sent', '1', wp_get_referer()));
+        exit;
+    }
+
+    /**
      * Show admin notices for debug mode and test event code.
      */
     public function show_admin_notices(): void {
@@ -1620,7 +1884,22 @@ class Meta_CAPI_Settings {
             delete_transient('meta_capi_test_result');
             $notice_class = $test_result['type'] === 'success' ? 'notice-success' : 'notice-error';
             echo '<div class="notice ' . esc_attr($notice_class) . ' is-dismissible">';
-            echo '<p>' . esc_html($test_result['message']) . '</p>';
+            // Allow HTML in success messages (for event ID display), but escape error messages.
+            if ($test_result['type'] === 'success') {
+                echo '<p>' . wp_kses_post($test_result['message']) . '</p>';
+            } else {
+                echo '<p>' . esc_html($test_result['message']) . '</p>';
+            }
+            echo '</div>';
+        }
+        
+        // Test notification result notice
+        $test_notification_result = get_transient('meta_capi_test_notification_result');
+        if ($test_notification_result) {
+            delete_transient('meta_capi_test_notification_result');
+            $notice_class = $test_notification_result['type'] === 'success' ? 'notice-success' : 'notice-error';
+            echo '<div class="notice ' . esc_attr($notice_class) . ' is-dismissible">';
+            echo '<p>' . esc_html($test_notification_result['message']) . '</p>';
             echo '</div>';
         }
 
