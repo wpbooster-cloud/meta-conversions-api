@@ -65,6 +65,25 @@ class Meta_CAPI_Elementor {
         $form_id = $record->get_form_settings('id');
         $raw_fields = $record->get('fields');
         
+        // CRITICAL: Check if current page is excluded FIRST (before any processing).
+        // During AJAX requests, get_queried_object_id() returns 0, so we need to get page ID from referrer.
+        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
+        $current_page_id = $this->get_current_page_id();
+        $is_page_excluded = false;
+        if (!empty($excluded_pages_str) && $current_page_id > 0) {
+            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
+            $is_page_excluded = in_array($current_page_id, $excluded_pages, true);
+            if ($is_page_excluded) {
+                $this->logger->info('Lead event skipped - page is in exclusion list', [
+                    'page_id' => $current_page_id,
+                    'form_id' => $form_id,
+                    'form_name' => $form_name,
+                    'referrer' => isset($_SERVER['HTTP_REFERER']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_REFERER'])) : 'none',
+                ]);
+                return; // CRITICAL: Exit early - don't send server event for excluded pages.
+            }
+        }
+        
         // Check if this form is excluded.
         $excluded_forms_str = get_option('meta_capi_exclude_forms', '');
         if (!empty($excluded_forms_str)) {
@@ -194,24 +213,6 @@ class Meta_CAPI_Elementor {
             }
 
             $custom_data[$field_title] = $field['value'];
-        }
-
-        // CRITICAL: Check if current page is excluded BEFORE generating event ID or sending.
-        // If page is excluded, skip server-side tracking entirely.
-        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
-        $current_page_id = get_queried_object_id();
-        $is_page_excluded = false;
-        if (!empty($excluded_pages_str) && $current_page_id > 0) {
-            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
-            $is_page_excluded = in_array($current_page_id, $excluded_pages, true);
-            if ($is_page_excluded) {
-                $this->logger->info('Lead event skipped - page is in exclusion list', [
-                    'page_id' => $current_page_id,
-                    'form_id' => $form_id,
-                    'form_name' => $form_name,
-                ]);
-                return; // CRITICAL: Exit early - don't send server event for excluded pages.
-            }
         }
 
         // Generate event ID BEFORE creating event data - use consistent format for deduplication.
@@ -452,6 +453,55 @@ class Meta_CAPI_Elementor {
         }
 
         return '';
+    }
+
+    /**
+     * Get current page ID.
+     * Works during AJAX requests by extracting page ID from HTTP_REFERER.
+     *
+     * @return int Page ID, or 0 if not found.
+     */
+    private function get_current_page_id(): int {
+        // First, try get_queried_object_id() (works for normal page loads).
+        $page_id = get_queried_object_id();
+        if ($page_id > 0) {
+            return $page_id;
+        }
+
+        // During AJAX requests, get_queried_object_id() returns 0.
+        // Extract page ID from HTTP_REFERER URL.
+        if (isset($_SERVER['HTTP_REFERER'])) {
+            $referrer = sanitize_url(wp_unslash($_SERVER['HTTP_REFERER']));
+            
+            // Try to extract page ID from URL (e.g., /page-slug/ or ?p=123).
+            // Method 1: Check for ?p= parameter.
+            $parsed_url = parse_url($referrer);
+            if (isset($parsed_url['query'])) {
+                parse_str($parsed_url['query'], $query_params);
+                if (isset($query_params['p']) && is_numeric($query_params['p'])) {
+                    return absint($query_params['p']);
+                }
+            }
+
+            // Method 2: Try to get page ID from URL path using url_to_postid().
+            $page_id = url_to_postid($referrer);
+            if ($page_id > 0) {
+                return $page_id;
+            }
+
+            // Method 3: Extract from permalink structure (e.g., /page-slug/).
+            // This is a fallback - url_to_postid() should handle most cases.
+            $path = isset($parsed_url['path']) ? trim($parsed_url['path'], '/') : '';
+            if (!empty($path)) {
+                // Try to match against known page slugs.
+                $page = get_page_by_path($path);
+                if ($page) {
+                    return $page->ID;
+                }
+            }
+        }
+
+        return 0;
     }
 
     /**
