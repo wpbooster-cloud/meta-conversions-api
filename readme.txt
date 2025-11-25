@@ -4,7 +4,7 @@ Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, 
 Requires at least: 6.0
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 2.0.1
+Stable tag: 2.0.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -97,6 +97,20 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 
 == Changelog ==
 
+= 2.0.2 =
+* Fixed PageView eventTime missing in fbq() call (critical deduplication fix)
+* Fixed Purchase event timestamp mismatch - now uses order creation time for consistency
+* Fixed AddToCart/InitiateCheckout event_time extraction from event_id to match browser
+* Improved error notification settings UI with visual grouping and better organization
+* Added inline email validation with visual checkmark indicator
+* Added success feedback message for test email notifications
+* Fixed test notification form nested inside main form (prevented submission)
+* Fixed analytics ping message when analytics are disabled
+* Updated documentation links to point to internal documentation
+* Added threshold helper text and help links for better UX
+
+= 2.0.1 =
+
 = 2.0.1 =
 
 * Fixed duplicate Lead events from Elementor forms (browser-side deduplication)
@@ -156,6 +170,10 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 * Test event functionality
 
 == Upgrade Notice ==
+
+= 2.0.2 =
+
+Bug fix and UI improvement release - Fixes critical eventTime bugs affecting deduplication for PageView, Purchase, AddToCart, and InitiateCheckout events. Also includes improved error notification UI and better user experience. Recommended for all users.
 
 = 2.0.1 =
 
