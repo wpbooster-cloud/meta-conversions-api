@@ -102,21 +102,15 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 * Updated tested WordPress version to 6.8.3
 
 = 2.0.2 =
-
-Critical Bug Fixes:
 * Fixed PageView eventTime missing in fbq() call - critical deduplication fix
 * Fixed Purchase event timestamp mismatch - now uses order creation time for consistency between browser and server
 * Fixed AddToCart/InitiateCheckout event_time extraction - server now extracts timestamp from event_id to match browser exactly
-
-UI/UX Improvements:
 * Improved error notification settings UI with visual grouping and better organization
 * Added inline email validation with visual checkmark indicator
 * Added success feedback message for test email notifications
 * Fixed test notification form nested inside main form (prevented submission)
 * Updated documentation links to point to internal documentation
 * Added threshold helper text and help links for better UX
-
-Other Fixes:
 * Fixed analytics ping message when analytics are disabled
 
 = 2.0.1 =
