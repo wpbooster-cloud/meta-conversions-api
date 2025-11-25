@@ -4,7 +4,7 @@ Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, 
 Requires at least: 6.0
 Tested up to: 6.8.3
 Requires PHP: 8.0
-Stable tag: 2.0.2
+Stable tag: 2.0.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -97,6 +97,10 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 
 == Changelog ==
 
+= 2.0.3 =
+* Fixed changelog formatting for better readability
+* Updated tested WordPress version to 6.8.3
+
 = 2.0.2 =
 
 Critical Bug Fixes:
@@ -174,6 +178,10 @@ Other Fixes:
 * Test event functionality
 
 == Upgrade Notice ==
+
+= 2.0.3 =
+
+Minor update - Fixed changelog formatting and updated tested WordPress version to 6.8.3.
 
 = 2.0.2 =
 
