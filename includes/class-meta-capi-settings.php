@@ -2071,7 +2071,7 @@ class Meta_CAPI_Settings {
                         </a>
                     </li>
                     <li><?php esc_html_e('Check logs in', 'meta-conversions-api'); ?>
-                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#log-viewer')); ?>">
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#debug-logging')); ?>">
                             <?php esc_html_e('Tools & Logs page', 'meta-conversions-api'); ?>
                         </a>
                     </li>
@@ -2084,7 +2084,7 @@ class Meta_CAPI_Settings {
                 <h2><?php esc_html_e('Debug Log Management', 'meta-conversions-api'); ?></h2>
                 <p>
                     <?php esc_html_e('View and download logs directly in the', 'meta-conversions-api'); ?> 
-                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#log-viewer')); ?>">
+                    <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools#debug-logging')); ?>">
                         <?php esc_html_e('Tools & Logs', 'meta-conversions-api'); ?>
                     </a> 
                     <?php esc_html_e('page - no FTP required!', 'meta-conversions-api'); ?>
@@ -2165,9 +2165,10 @@ class Meta_CAPI_Settings {
         }
 
         // Handle clear logs action
+        // CRITICAL: Use check_admin_referer() for additional CSRF protection (validates referer header).
+        // This matches the security level of toggle_debug action for consistency.
         if (isset($_POST['clear_logs'])) {
-            $nonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
-            if (!wp_verify_nonce($nonce, 'meta_capi_clear_logs')) {
+            if (!check_admin_referer('meta_capi_clear_logs', '_wpnonce')) {
                 add_settings_error(
                     'meta_capi_tools',
                     'nonce_expired',
@@ -2186,9 +2187,10 @@ class Meta_CAPI_Settings {
         }
 
         // Handle toggle debug logging
+        // CRITICAL: Use check_admin_referer() for additional CSRF protection (validates referer header).
+        // This matches the security level of clear_logs action for consistency.
         if (isset($_POST['toggle_debug'])) {
-            $nonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
-            if (!wp_verify_nonce($nonce, 'meta_capi_toggle_debug')) {
+            if (!check_admin_referer('meta_capi_toggle_debug', '_wpnonce')) {
                 add_settings_error(
                     'meta_capi_tools',
                     'nonce_expired',
@@ -2271,6 +2273,136 @@ class Meta_CAPI_Settings {
                         </button>
                     <?php endif; ?>
                 </form>
+
+                <!-- Recent Log Entries (moved here) -->
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #dcdcde;">
+                    <h3><?php esc_html_e('Recent Log Entries', 'meta-conversions-api'); ?></h3>
+                    
+                    <?php if (!get_option('meta_capi_enable_logging')): ?>
+                        <div class="notice notice-info inline">
+                            <p><?php esc_html_e('Debug logging is currently disabled. Enable it above to start logging events.', 'meta-conversions-api'); ?></p>
+                        </div>
+                    <?php elseif (file_exists($log_file)): ?>
+                        <p>
+                            <strong><?php esc_html_e('Log file:', 'meta-conversions-api'); ?></strong> 
+                            <code><?php echo esc_html(basename($log_file)); ?></code>
+                            (<?php echo esc_html(size_format(filesize($log_file))); ?>)
+                        </p>
+                        
+                        <p>
+                            <a href="<?php echo esc_url(wp_nonce_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools&download_log=1'), 'meta_capi_download_log')); ?>" class="button button-secondary">
+                                <?php esc_html_e('Download Log File', 'meta-conversions-api'); ?>
+                            </a>
+                            <button type="button" id="copy-log-btn" class="button button-secondary" style="margin-left: 8px;">
+                                📋 <?php esc_html_e('Copy to Clipboard', 'meta-conversions-api'); ?>
+                            </button>
+                        </p>
+                        
+                        <details style="margin-top: 15px;">
+                            <summary style="cursor: pointer; padding: 10px; background: #f6f7f9; border: 1px solid #dcdcde; border-radius: 4px; font-weight: 600;">
+                                <?php esc_html_e('View Log Entries (Last 20)', 'meta-conversions-api'); ?>
+                            </summary>
+                            
+                            <?php
+                            $log_content = file_get_contents($log_file);
+                            $log_lines = explode('---', $log_content);
+                            $recent_logs = array_slice(array_reverse($log_lines), 0, 20);
+                            ?>
+                            
+                            <div id="log-content" style="background: #f0f0f1; padding: 15px; border-radius: 4px; max-height: 500px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; margin-top: 10px;">
+                                <?php
+                                foreach ($recent_logs as $log_entry) {
+                                    if (trim($log_entry)) {
+                                        echo '<div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #ddd;">';
+                                        echo nl2br(esc_html(trim($log_entry)));
+                                        echo '</div>';
+                                    }
+                                }
+                                ?>
+                            </div>
+                        </details>
+                        
+                        <script>
+                        document.getElementById('copy-log-btn').addEventListener('click', function() {
+                            const logContent = <?php echo json_encode($log_content); ?>;
+                            navigator.clipboard.writeText(logContent).then(() => {
+                                const btn = this;
+                                const originalText = btn.innerHTML;
+                                btn.innerHTML = '✅ <?php esc_html_e('Copied!', 'meta-conversions-api'); ?>';
+                                btn.style.background = '#00a32a';
+                                btn.style.borderColor = '#00a32a';
+                                btn.style.color = '#fff';
+                                setTimeout(() => {
+                                    btn.innerHTML = originalText;
+                                    btn.style.background = '';
+                                    btn.style.borderColor = '';
+                                    btn.style.color = '';
+                                }, 2000);
+                            }).catch(err => {
+                                alert('<?php esc_html_e('Failed to copy. Please copy manually.', 'meta-conversions-api'); ?>');
+                            });
+                        });
+                        </script>
+                        
+                        <!-- Clear Logs Section -->
+                        <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #dcdcde;">
+                            <h3><?php esc_html_e('Clear Logs', 'meta-conversions-api'); ?></h3>
+                            <p><?php esc_html_e('Remove all debug log files. This action cannot be undone.', 'meta-conversions-api'); ?></p>
+                            
+                            <?php
+                            $log_files = glob($log_dir . '/meta-capi-*.log');
+                            $total_size = 0;
+                            if ($log_files) {
+                                foreach ($log_files as $file) {
+                                    $total_size += filesize($file);
+                                }
+                            }
+                            ?>
+                            
+                            <p>
+                                <strong><?php esc_html_e('Current logs:', 'meta-conversions-api'); ?></strong>
+                                <?php echo count($log_files); ?> <?php esc_html_e('files', 'meta-conversions-api'); ?>
+                                (<?php echo esc_html(size_format($total_size)); ?>)
+                            </p>
+                            
+                            <form method="post" onsubmit="return confirm('<?php esc_attr_e('Are you sure you want to delete all log files? This cannot be undone.', 'meta-conversions-api'); ?>');">
+                                <?php wp_nonce_field('meta_capi_clear_logs'); ?>
+                                <input type="hidden" name="clear_logs" value="1">
+                                <button type="submit" class="button button-secondary">
+                                    <?php esc_html_e('Clear All Logs', 'meta-conversions-api'); ?>
+                                </button>
+                            </form>
+                        </div>
+                        
+                    <?php else: ?>
+                        <p><?php esc_html_e('No log file found for today. Logs will be created when events are tracked.', 'meta-conversions-api'); ?></p>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Log File Location (collapsible) -->
+                <details style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #dcdcde;">
+                    <summary style="cursor: pointer; padding: 10px; background: #f6f7f9; border: 1px solid #dcdcde; border-radius: 4px; font-weight: 600;">
+                        <?php esc_html_e('Log File Location', 'meta-conversions-api'); ?>
+                    </summary>
+                    <div style="margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 4px;">
+                        <p>
+                            <?php esc_html_e('Debug logs are stored at:', 'meta-conversions-api'); ?><br>
+                            <code><?php echo esc_html($log_dir); ?>/meta-capi-YYYY-MM-DD.log</code>
+                        </p>
+                        <p>
+                            <?php esc_html_e('You can access these files via:', 'meta-conversions-api'); ?>
+                        </p>
+                        <ul style="list-style: disc; margin-left: 20px;">
+                            <li><?php esc_html_e('FTP/SFTP client', 'meta-conversions-api'); ?></li>
+                            <li><?php esc_html_e('cPanel File Manager', 'meta-conversions-api'); ?></li>
+                            <li><?php esc_html_e('WordPress File Manager plugin', 'meta-conversions-api'); ?></li>
+                            <li><?php esc_html_e('SSH (if available)', 'meta-conversions-api'); ?></li>
+                        </ul>
+                        <p>
+                            <em><?php esc_html_e('Note: Log files older than 30 days are automatically deleted.', 'meta-conversions-api'); ?></em>
+                        </p>
+                    </div>
+                </details>
             </div>
 
             <!-- Update Check -->
@@ -2493,134 +2625,9 @@ class Meta_CAPI_Settings {
                     <?php
                 }
                 ?>
-            </div>
+                </div>
 
 
-            <!-- Log Viewer -->
-            <div class="card" id="log-viewer" style="max-width: 100%; margin-top: 20px;">
-                <h2><?php esc_html_e('Recent Log Entries', 'meta-conversions-api'); ?></h2>
-                
-                <?php if (!get_option('meta_capi_enable_logging')): ?>
-                    <div class="notice notice-info inline">
-                        <p><?php esc_html_e('Debug logging is currently disabled. Enable it above to start logging events.', 'meta-conversions-api'); ?></p>
-                    </div>
-                <?php elseif (file_exists($log_file)): ?>
-                    <p>
-                        <strong><?php esc_html_e('Log file:', 'meta-conversions-api'); ?></strong> 
-                        <code><?php echo esc_html(basename($log_file)); ?></code>
-                        (<?php echo esc_html(size_format(filesize($log_file))); ?>)
-                    </p>
-                    
-                    <p>
-                        <a href="<?php echo esc_url(wp_nonce_url(admin_url('options-general.php?page=meta-conversions-api&tab=tools&download_log=1'), 'meta_capi_download_log')); ?>" class="button button-secondary">
-                            <?php esc_html_e('Download Log File', 'meta-conversions-api'); ?>
-                        </a>
-                        <button type="button" id="copy-log-btn" class="button button-secondary" style="margin-left: 8px;">
-                            📋 <?php esc_html_e('Copy to Clipboard', 'meta-conversions-api'); ?>
-                        </button>
-                    </p>
-                    
-                    <details style="margin-top: 15px;">
-                        <summary style="cursor: pointer; padding: 10px; background: #f6f7f9; border: 1px solid #dcdcde; border-radius: 4px; font-weight: 600;">
-                            <?php esc_html_e('View Log Entries (Last 20)', 'meta-conversions-api'); ?>
-                        </summary>
-                        
-                        <?php
-                        $log_content = file_get_contents($log_file);
-                        $log_lines = explode('---', $log_content);
-                        $recent_logs = array_slice(array_reverse($log_lines), 0, 20);
-                        ?>
-                        
-                        <div id="log-content" style="background: #f0f0f1; padding: 15px; border-radius: 4px; max-height: 500px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; margin-top: 10px;">
-                            <?php
-                            foreach ($recent_logs as $log_entry) {
-                                if (trim($log_entry)) {
-                                    echo '<div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #ddd;">';
-                                    echo nl2br(esc_html(trim($log_entry)));
-                                    echo '</div>';
-                                }
-                            }
-                            ?>
-                        </div>
-                    </details>
-                    
-                    <script>
-                    document.getElementById('copy-log-btn').addEventListener('click', function() {
-                        const logContent = <?php echo json_encode($log_content); ?>;
-                        navigator.clipboard.writeText(logContent).then(() => {
-                            const btn = this;
-                            const originalText = btn.innerHTML;
-                            btn.innerHTML = '✅ <?php esc_html_e('Copied!', 'meta-conversions-api'); ?>';
-                            btn.style.background = '#00a32a';
-                            btn.style.borderColor = '#00a32a';
-                            btn.style.color = '#fff';
-                            setTimeout(() => {
-                                btn.innerHTML = originalText;
-                                btn.style.background = '';
-                                btn.style.borderColor = '';
-                                btn.style.color = '';
-                            }, 2000);
-                        }).catch(err => {
-                            alert('<?php esc_html_e('Failed to copy. Please copy manually.', 'meta-conversions-api'); ?>');
-                        });
-                    });
-                    </script>
-                    
-                    <!-- Clear Logs Section -->
-                    <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #dcdcde;">
-                        <h3><?php esc_html_e('Clear Logs', 'meta-conversions-api'); ?></h3>
-                        <p><?php esc_html_e('Remove all debug log files. This action cannot be undone.', 'meta-conversions-api'); ?></p>
-                        
-                        <?php
-                        $log_files = glob($log_dir . '/meta-capi-*.log');
-                        $total_size = 0;
-                        if ($log_files) {
-                            foreach ($log_files as $file) {
-                                $total_size += filesize($file);
-                            }
-                        }
-                        ?>
-                        
-                        <p>
-                            <strong><?php esc_html_e('Current logs:', 'meta-conversions-api'); ?></strong>
-                            <?php echo count($log_files); ?> <?php esc_html_e('files', 'meta-conversions-api'); ?>
-                            (<?php echo esc_html(size_format($total_size)); ?>)
-                        </p>
-                        
-                        <form method="post" onsubmit="return confirm('<?php esc_attr_e('Are you sure you want to delete all log files? This cannot be undone.', 'meta-conversions-api'); ?>');">
-                            <?php wp_nonce_field('meta_capi_clear_logs'); ?>
-                            <input type="hidden" name="clear_logs" value="1">
-                            <button type="submit" class="button button-secondary">
-                                <?php esc_html_e('Clear All Logs', 'meta-conversions-api'); ?>
-                            </button>
-                        </form>
-                    </div>
-                    
-                <?php else: ?>
-                    <p><?php esc_html_e('No log file found for today. Logs will be created when events are tracked.', 'meta-conversions-api'); ?></p>
-                <?php endif; ?>
-            </div>
-
-            <!-- Log File Location -->
-            <div class="card" style="max-width: 100%; margin-top: 20px;">
-                <h2><?php esc_html_e('Log File Location', 'meta-conversions-api'); ?></h2>
-                <p>
-                    <?php esc_html_e('Debug logs are stored at:', 'meta-conversions-api'); ?><br>
-                    <code><?php echo esc_html($log_dir); ?>/meta-capi-YYYY-MM-DD.log</code>
-                </p>
-                <p>
-                    <?php esc_html_e('You can access these files via:', 'meta-conversions-api'); ?>
-                </p>
-                <ul style="list-style: disc; margin-left: 20px;">
-                    <li><?php esc_html_e('FTP/SFTP client', 'meta-conversions-api'); ?></li>
-                    <li><?php esc_html_e('cPanel File Manager', 'meta-conversions-api'); ?></li>
-                    <li><?php esc_html_e('WordPress File Manager plugin', 'meta-conversions-api'); ?></li>
-                    <li><?php esc_html_e('SSH (if available)', 'meta-conversions-api'); ?></li>
-                </ul>
-                <p>
-                    <em><?php esc_html_e('Note: Log files older than 30 days are automatically deleted.', 'meta-conversions-api'); ?></em>
-                </p>
-            </div>
 
                 </div>
 

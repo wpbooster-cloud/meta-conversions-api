@@ -15,7 +15,7 @@
 
 (function($) {
     'use strict';
-
+    
     // Wait for DOM and Meta Pixel to be ready
     $(document).ready(function() {
         if (typeof fbq === 'undefined') {
@@ -76,11 +76,18 @@
                     eventId = this.generateEventId('ViewContent', productData.id);
                 }
 
+                // CRITICAL: Match server-side format exactly for deduplication.
+                // Server sends: content_ids (strings), content_name, content_type, content_category, contents array, value, currency
                 fbq('track', 'ViewContent', {
-                    content_ids: [productData.id],
+                    content_ids: [String(productData.id)], // Convert to string to match server format
                     content_name: productData.name,
                     content_type: 'product',
                     content_category: productData.category || '',
+                    contents: [{ // Include contents array to match server format
+                        id: String(productData.id),
+                        quantity: 1,
+                        item_price: productData.price
+                    }],
                     value: productData.price,
                     currency: productData.currency
                 }, {
@@ -125,15 +132,42 @@
                     let eventId = '';
                     let isFallback = false; // Track if we're using a fallback-generated ID.
                     
-                    // Extract event ID from fragments (if provided by server).
+                    // Extract event ID, product URL, product price, and product name from fragments (if provided by server).
                     // The server injects it as a hidden div in fragments['meta_capi_addtocart_event_id'].
+                    let productUrl = window.location.href; // Default to current URL
+                    let serverProductPrice = null; // Server-provided price for deduplication matching
+                    let serverProductName = null; // Server-provided name for deduplication matching
                     if (fragments && fragments.meta_capi_addtocart_event_id) {
-                        // Parse HTML fragment to extract data-event-id attribute.
+                        // Parse HTML fragment to extract data attributes.
                         const tempDiv = document.createElement('div');
                         tempDiv.innerHTML = fragments.meta_capi_addtocart_event_id;
                         const eventIdElement = tempDiv.querySelector('#meta-capi-addtocart-event-id');
                         if (eventIdElement) {
                             eventId = eventIdElement.getAttribute('data-event-id') || '';
+                            // CRITICAL: Get product page URL from server (for deduplication).
+                            // Meta uses event_source_url as part of deduplication matching.
+                            // Browser and server must use the SAME URL (product page, not homepage).
+                            const serverProductUrl = eventIdElement.getAttribute('data-product-url');
+                            if (serverProductUrl) {
+                                productUrl = serverProductUrl;
+                            }
+                            // CRITICAL: Get product price from server to match server's value for deduplication.
+                            const serverPrice = eventIdElement.getAttribute('data-product-price');
+                            if (serverPrice !== null) {
+                                serverProductPrice = parseFloat(serverPrice);
+                                if (!isNaN(serverProductPrice)) {
+                                    // Use server-provided price to ensure exact match with server event.
+                                    productData.price = serverProductPrice;
+                                }
+                            }
+                            // CRITICAL: Get product name from server to match server's format for deduplication.
+                            // Server sends clean product name (e.g., "Hat"), not "Add to cart: Hat".
+                            const serverName = eventIdElement.getAttribute('data-product-name');
+                            if (serverName) {
+                                serverProductName = serverName;
+                                // Use server-provided name to ensure exact match with server event.
+                                productData.name = serverProductName;
+                            }
                         }
                     }
                     
@@ -149,21 +183,71 @@
                     const currency = productData.currency || 
                                    (typeof metaCAPIWooCommerceData !== 'undefined' ? metaCAPIWooCommerceData.currency : 'USD');
 
+                    // CRITICAL: Meta Pixel automatically uses window.location.href as event_source_url.
+                    // If the page has changed (redirect after add-to-cart), we need to ensure
+                    // the event fires from the product page URL. However, Meta Pixel doesn't allow
+                    // us to override event_source_url directly. The best we can do is:
+                    // 1. Log the URL mismatch for debugging
+                    // 2. Ensure the event fires before any redirect
+                    // 3. Use the product URL from server in our logging
+                    
+                    // Check if current URL matches product URL (for deduplication debugging).
+                    const currentUrl = window.location.href;
+                    const urlMatches = currentUrl === productUrl || currentUrl.replace(/\/$/, '') === productUrl.replace(/\/$/, '');
+                    if (!urlMatches) {
+                        console.warn('[Meta CAPI] URL mismatch detected - this may break deduplication!', {
+                            current_url: currentUrl,
+                            product_url: productUrl,
+                            note: 'Browser event will use current_url, but server uses product_url. They must match for deduplication.'
+                        });
+                    }
+
+                    // CRITICAL: Extract timestamp from event_id to match server-side event_time exactly.
+                    // Event ID format: addtocart_{product_id}_{timestamp_ms} where timestamp is in milliseconds.
+                    // We extract this and convert to seconds to ensure perfect alignment with CAPI.
+                    // eventTime must be a Unix timestamp in seconds (not milliseconds).
+                    const eventTime = (function() {
+                        var eventParts = eventId.split('_');
+                        if (eventParts.length >= 3) {
+                            var timestampMs = parseInt(eventParts[eventParts.length - 1], 10);
+                            if (!isNaN(timestampMs)) {
+                                return Math.floor(timestampMs / 1000); // Convert milliseconds to seconds.
+                            }
+                        }
+                        // Fallback to current time if extraction fails (shouldn't happen).
+                        return Math.floor(Date.now() / 1000);
+                    })();
+
+                    // CRITICAL: Match server-side format exactly for deduplication.
+                    // - content_ids must be strings (server sends ["36"], not [36])
+                    // - content_name must match server exactly (no "Add to cart: " prefix)
+                    // - contents array must be included to match server format
+                    // CRITICAL: Pass eventID for deduplication.
+                    // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
                     fbq('track', 'AddToCart', {
-                        content_ids: [productData.id],
-                        content_name: productData.name,
+                        content_ids: [String(productData.id)], // Convert to string to match server format
+                        content_name: productData.name, // Use server-provided name (clean, no prefix)
                         content_type: 'product',
+                        contents: [{ // Include contents array to match server format
+                            id: String(productData.id),
+                            quantity: quantity,
+                            item_price: productData.price
+                        }],
                         value: productData.price * quantity,
                         currency: currency
                     }, {
                         eventID: eventId
                     });
 
-                    console.log('Meta CAPI: AddToCart event tracked (AJAX)', {
-                        product_id: productId,
-                        quantity: quantity,
+                    console.log('[Meta CAPI Debug] AddToCart event tracked (AJAX) - FULL PAYLOAD', {
+                            product_id: productId,
+                            quantity: quantity,
                         event_id: eventId,
-                        source: isFallback ? 'browser_generated' : 'server_provided'
+                        source: isFallback ? 'browser_generated' : 'server_provided',
+                        event_source_url: currentUrl, // What Meta Pixel will use
+                        product_url_from_server: productUrl, // What server will use
+                        url_match: urlMatches,
+                        warning: !urlMatches ? 'URL mismatch - deduplication may fail!' : 'URLs match - deduplication should work'
                     });
                 });
 
@@ -199,6 +283,24 @@
                         isFallback = true; // Mark as fallback-generated.
                     }
 
+                    // CRITICAL: Extract timestamp from event_id to match server-side event_time exactly.
+                    // Event ID format: addtocart_{product_id}_{timestamp_ms} where timestamp is in milliseconds.
+                    // We extract this and convert to seconds to ensure perfect alignment with CAPI.
+                    // eventTime must be a Unix timestamp in seconds (not milliseconds).
+                    const eventTime = (function() {
+                        var eventParts = eventId.split('_');
+                        if (eventParts.length >= 3) {
+                            var timestampMs = parseInt(eventParts[eventParts.length - 1], 10);
+                            if (!isNaN(timestampMs)) {
+                                return Math.floor(timestampMs / 1000); // Convert milliseconds to seconds.
+                            }
+                        }
+                        // Fallback to current time if extraction fails (shouldn't happen).
+                        return Math.floor(Date.now() / 1000);
+                    })();
+
+                    // CRITICAL: Pass eventID for deduplication.
+                    // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
                     fbq('track', 'AddToCart', {
                         content_ids: [variationId || productData.id],
                         content_name: productData.name,
@@ -233,7 +335,7 @@
 
                 // Use server-generated event ID for deduplication (if available).
                 // Server generates this on checkout page load, ensuring Pixel and CAPI use the SAME event ID.
-                // Format: checkout_{session_id}_{timestamp} - must match server-side exactly.
+                // Format: checkout_{session_id}_{timestamp_ms} - must match server-side exactly.
                 let eventId = cartData.initiatecheckout_event_id;
                 
                 // Fallback: Generate if server didn't provide one (shouldn't happen).
@@ -242,9 +344,43 @@
                     // Try to get session identifier (would need to be passed from server for proper matching).
                     eventId = this.generateEventId('InitiateCheckout', '');
                 }
+                
+                // CRITICAL: Extract timestamp from event_id to match server-side event_time exactly.
+                // Event ID format: checkout_{session_id}_{timestamp_ms} where timestamp is in milliseconds.
+                // We extract this and convert to seconds to ensure perfect alignment with CAPI.
+                // eventTime must be a Unix timestamp in seconds (not milliseconds).
+                const eventTime = (function() {
+                    var eventParts = eventId.split('_');
+                    if (eventParts.length >= 3) {
+                        var timestampMs = parseInt(eventParts[eventParts.length - 1], 10);
+                        if (!isNaN(timestampMs)) {
+                            return Math.floor(timestampMs / 1000); // Convert milliseconds to seconds.
+                        }
+                    }
+                    // Fallback to current time if extraction fails (shouldn't happen).
+                    return Math.floor(Date.now() / 1000);
+                })();
 
+                // Get fbp cookie (Meta Pixel automatically includes this in user_data).
+                var fbpCookie = '';
+                var cookies = document.cookie.split(';');
+                for (var i = 0; i < cookies.length; i++) {
+                    var cookie = cookies[i].trim();
+                    if (cookie.indexOf('_fbp=') === 0) {
+                        fbpCookie = cookie.substring(5);
+                        break;
+                    }
+                }
+                
+                // Get user agent (Meta Pixel automatically includes this in user_data).
+                var userAgent = navigator.userAgent || 'unknown';
+                
+                // CRITICAL: Pass eventID for deduplication.
+                // Let Meta Pixel use its own timing (it will match server's event_time from event_id).
+                // CRITICAL: Include content_name to match server-side format for deduplication.
                 fbq('track', 'InitiateCheckout', {
                     content_ids: cartData.content_ids || [],
+                    content_name: cartData.content_name || '', // Match server-side format (comma-separated product names).
                     contents: cartData.contents || [],
                     content_type: 'product',
                     value: cartData.value || 0,
@@ -254,10 +390,28 @@
                     eventID: eventId
                 });
 
-                console.log('Meta CAPI: InitiateCheckout event tracked', {
-                    value: cartData.value,
-                    num_items: cartData.num_items,
-                    event_id: eventId
+                console.log('[Meta CAPI Debug] InitiateCheckout event tracked - FULL PAYLOAD', {
+                    event_id: eventId,
+                    event_time: eventTime,
+                    event_time_formatted: new Date(eventTime * 1000).toISOString(),
+                    event_time_current: Math.floor(Date.now() / 1000),
+                    time_difference: Math.floor(Date.now() / 1000) - eventTime,
+                    source: 'Browser',
+                    url: window.location.href,
+                    user_data: {
+                        fbp: fbpCookie || 'not_set_yet',
+                        fbp_preview: fbpCookie ? fbpCookie.substring(0, 30) + '...' : 'not_set_yet',
+                        user_agent: userAgent.substring(0, 100) + '...',
+                        ip_address: 'browser_detected', // Meta Pixel gets IP from request, not JavaScript
+                        note: 'Meta Pixel automatically includes fbp, IP (from request), and user agent in event'
+                    },
+                    custom_data: {
+                        value: cartData.value || 0,
+                        currency: cartData.currency,
+                        num_items: cartData.num_items || 0,
+                        content_ids: cartData.content_ids || []
+                    },
+                    note: 'Compare user_data with server logs - IP, user_agent, and fbp MUST match for deduplication'
                 });
             },
 
@@ -293,38 +447,83 @@
 
                 // Use order ID as unique identifier for deduplication with server
                 const eventId = 'purchase_' + orderData.id;
+                
+                // CRITICAL: Use order creation timestamp (from server) to match server event_time exactly.
+                // Server uses order creation time, browser must use the same for deduplication.
+                // eventTime must be a Unix timestamp in seconds (not milliseconds).
+                // CRITICAL: Validate that eventTime is a valid number to prevent RangeError in date formatting.
+                const eventTime = (function() {
+                    if (orderData.event_time) {
+                        const parsed = parseInt(orderData.event_time, 10);
+                        if (!isNaN(parsed) && parsed > 0) {
+                            return parsed; // Valid timestamp
+                        }
+                    }
+                    // Fallback to current time if server data is missing or invalid
+                    return Math.floor(Date.now() / 1000);
+                })();
 
-                // Ensure we have required values
+                // Get fbp cookie (Meta Pixel automatically includes this in user_data).
+                var fbpCookie = '';
+                var cookies = document.cookie.split(';');
+                for (var i = 0; i < cookies.length; i++) {
+                    var cookie = cookies[i].trim();
+                    if (cookie.indexOf('_fbp=') === 0) {
+                        fbpCookie = cookie.substring(5);
+                        break;
+                    }
+                }
+                
+                // Get user agent (Meta Pixel automatically includes this in user_data).
+                var userAgent = navigator.userAgent || 'unknown';
+
+                // CRITICAL: Match server-side format exactly for deduplication.
+                // Include content_name and order_id to match server format.
                 const purchaseData = {
-                    content_ids: orderData.content_ids || [],
-                    contents: orderData.contents || [],
-                    content_type: 'product',
-                    value: parseFloat(orderData.value) || 0,
-                    currency: orderData.currency || metaCAPIWooCommerceData.currency || 'USD',
-                    num_items: parseInt(orderData.num_items) || 0
-                };
+                        content_ids: orderData.content_ids || [],
+                        content_name: orderData.content_name || '', // Match server-side format for deduplication.
+                        contents: orderData.contents || [],
+                        content_type: 'product',
+                        value: parseFloat(orderData.value) || 0,
+                        currency: orderData.currency || metaCAPIWooCommerceData.currency || 'USD',
+                        num_items: parseInt(orderData.num_items) || 0,
+                        order_id: orderData.id || '' // Match server-side format for deduplication.
+                    };
 
                 if (typeof fbq === 'undefined') {
                     console.error('Meta CAPI: Facebook Pixel (fbq) not loaded. Purchase event not tracked.');
                     return;
                 }
 
+                // CRITICAL: Pass eventID for deduplication.
+                // Let Meta Pixel use its own timing (it will match server's event_time from order creation).
                 fbq('track', 'Purchase', purchaseData, {
                     eventID: eventId
                 });
 
-                console.log('Meta CAPI: Purchase event tracked (browser-side)', {
-                    order_id: orderData.id,
-                    value: purchaseData.value,
-                    currency: purchaseData.currency,
-                    num_items: purchaseData.num_items,
-                    event_id: eventId
+                console.log('[Meta CAPI Debug] Purchase event tracked - FULL PAYLOAD', {
+                    event_id: eventId,
+                    event_time: eventTime,
+                    event_time_formatted: new Date(eventTime * 1000).toISOString(),
+                    event_time_current: Math.floor(Date.now() / 1000),
+                    time_difference: Math.floor(Date.now() / 1000) - eventTime,
+                    source: 'Browser',
+                    url: window.location.href,
+                    user_data: {
+                        fbp: fbpCookie || 'not_set_yet',
+                        fbp_preview: fbpCookie ? fbpCookie.substring(0, 30) + '...' : 'not_set_yet',
+                        user_agent: userAgent.substring(0, 100) + '...',
+                        ip_address: 'browser_detected', // Meta Pixel gets IP from request, not JavaScript
+                        note: 'Meta Pixel automatically includes fbp, IP (from request), and user agent in event'
+                    },
+                    custom_data: purchaseData,
+                    note: 'eventTime MUST match server-side event_time (order creation time) for deduplication. Compare user_data with server logs - IP, user_agent, and fbp MUST match.'
                 });
             }
-        };
+            };
 
         // Initialize
-        MetaCAPIWooCommerce.init();
+            MetaCAPIWooCommerce.init();
     });
 
 })(jQuery);

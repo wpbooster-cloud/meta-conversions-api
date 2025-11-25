@@ -211,6 +211,11 @@ class Meta_CAPI_Pixel {
         ?>
         <!-- Meta Pixel Code (Meta Conversions API Plugin) -->
         <script type="text/javascript">
+        // Log pixel initialization for debugging
+        if (typeof console !== 'undefined' && console.log) {
+            console.log('[Meta CAPI] Pixel code executing - initializing fbq function');
+        }
+        
         !function(f,b,e,v,n,t,s)
         {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
         n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -220,11 +225,36 @@ class Meta_CAPI_Pixel {
         s.parentNode.insertBefore(t,s)}(window, document,'script',
         'https://connect.facebook.net/en_US/fbevents.js');
         
+        // Log after fbq function is created
+        if (typeof console !== 'undefined' && console.log) {
+            console.log('[Meta CAPI] fbq function created', {
+                fbq_exists: typeof fbq !== 'undefined',
+                fbq_type: typeof fbq,
+                pixel_id: '<?php echo esc_js($this->pixel_id); ?>'
+            });
+        }
+        
         // CRITICAL: Always disable autoConfig to prevent automatic PageView tracking.
         // Meta Pixel's auto PageView fires immediately on init with its own timestamp,
         // which would break deduplication. We track PageView manually with our event ID.
+        try {
         fbq('set', 'autoConfig', false, '<?php echo esc_js($this->pixel_id); ?>');
         fbq('init', '<?php echo esc_js($this->pixel_id); ?>');
+            
+            if (typeof console !== 'undefined' && console.log) {
+                console.log('[Meta CAPI] Pixel initialized', {
+                    pixel_id: '<?php echo esc_js($this->pixel_id); ?>',
+                    autoConfig_disabled: true
+                });
+            }
+        } catch (e) {
+            if (typeof console !== 'undefined' && console.error) {
+                console.error('[Meta CAPI] Error initializing pixel', {
+                    error: e.message,
+                    pixel_id: '<?php echo esc_js($this->pixel_id); ?>'
+                });
+            }
+        }
         
         <?php
         // Get event ID from tracking class (generated early in template_redirect).
@@ -283,14 +313,51 @@ class Meta_CAPI_Pixel {
             // Set flag IMMEDIATELY to prevent race conditions if script runs multiple times.
             window._metaCapiPageViewTracked = true;
             var eventId = '<?php echo esc_js($pageview_event_id); ?>';
+            var serverTime = <?php echo time(); ?>;
+            var currentTime = Math.floor(Date.now() / 1000);
+            
+            // CRITICAL: Check if event_id is stale (from cached page).
+            // Only regenerate if event_id is VERY old (60+ seconds), indicating a truly cached page.
+            // We should NOT regenerate for normal page load delays (server_time vs current_time can differ by 10-30 seconds
+            // due to page rendering time, which is normal and doesn't indicate caching).
+            // The server event WILL be sent even if there's a delay, so we must use the SAME event ID.
+            var eventIdAge = 0;
+            var isStale = false;
+            var parts = eventId.split('_');
+            if (parts.length >= 3) {
+                var timestampMs = parseInt(parts[parts.length - 1], 10);
+                if (!isNaN(timestampMs)) {
+                    var eventIdTime = Math.floor(timestampMs / 1000);
+                    eventIdAge = currentTime - eventIdTime;
+                    
+                    // Only regenerate if event_id is VERY old (60+ seconds), indicating a truly cached page.
+                    // Normal page load delays (5-30 seconds) are expected and should NOT trigger regeneration.
+                    // The server event will be sent via wp_footer hook, so we must use the SAME event ID.
+                    if (eventIdAge > 60) {
+                        isStale = true;
+                        if (typeof console !== 'undefined' && console.warn) {
+                            console.warn('[Meta CAPI] Event ID is stale (likely from cached page - 60+ seconds old)', {
+                                old_event_id: eventId,
+                                event_id_age_seconds: eventIdAge,
+                                server_time: serverTime,
+                                current_time: currentTime,
+                                note: 'Event ID is very old. Page appears to be cached. Server event may not be sent. Consider excluding plugin from page cache (Breeze).'
+                            });
+                        }
+                        // Generate fresh event_id: pageview_{page_id}_{current_timestamp_ms}
+                        var pageId = parts.length >= 2 ? parts[1] : 'unknown';
+                        eventId = 'pageview_' + pageId + '_' + Date.now();
+                    }
+                }
+            }
             
             // CRITICAL: Extract timestamp from event_id to match server-side event_time exactly.
             // Event ID format: pageview_{identifier}_{timestamp_ms} where timestamp is in milliseconds.
             // We extract this and convert to seconds to ensure perfect alignment with CAPI.
             var eventTime = (function() {
-                var parts = eventId.split('_');
-                if (parts.length >= 3) {
-                    var timestampMs = parseInt(parts[parts.length - 1], 10);
+                var eventParts = eventId.split('_');
+                if (eventParts.length >= 3) {
+                    var timestampMs = parseInt(eventParts[eventParts.length - 1], 10);
                     if (!isNaN(timestampMs)) {
                         return Math.floor(timestampMs / 1000); // Convert milliseconds to seconds.
                     }
@@ -313,17 +380,33 @@ class Meta_CAPI_Pixel {
                     }
                 }
                 
-                console.log('[Meta CAPI Debug] PageView tracked via Pixel', {
+                // Get user agent and IP (as detected by browser - Meta Pixel will use this).
+                var userAgent = navigator.userAgent || 'unknown';
+                var ipAddress = 'browser_detected'; // Meta Pixel gets IP from request, not JavaScript
+                
+                console.log('[Meta CAPI Debug] PageView tracked via Pixel - FULL PAYLOAD', {
                     event_id: eventId,
                     event_time: eventTime,
                     event_time_formatted: new Date(eventTime * 1000).toISOString(),
                     event_time_unix: eventTime,
+                    event_time_current: Math.floor(Date.now() / 1000),
+                    time_difference: Math.floor(Date.now() / 1000) - eventTime,
                     source: 'Browser',
                     url: window.location.href,
                     user_data: {
                         fbp: fbpCookie || 'not_set_yet',
-                        fbp_preview: fbpCookie ? fbpCookie.substring(0, 20) + '...' : 'not_set_yet',
-                        note: 'Meta Pixel automatically includes fbp, IP, and user agent in event'
+                        fbp_preview: fbpCookie ? fbpCookie.substring(0, 30) + '...' : 'not_set_yet',
+                        user_agent: userAgent.substring(0, 100) + '...',
+                        ip_address: ipAddress,
+                        note: 'Meta Pixel automatically includes fbp, IP (from request), and user agent in event'
+                    },
+                    pixel_payload: {
+                        eventName: 'PageView',
+                        eventData: {},
+                        options: {
+                            eventID: eventId,
+                            eventTime: eventTime
+                        }
                     }
                 });
             }
@@ -339,8 +422,12 @@ class Meta_CAPI_Pixel {
                     event_id: eventId,
                     event_time_extracted: eventTime,
                     event_time_current: currentTime,
+                    event_id_age_seconds: eventIdAge,
                     time_difference_seconds: currentTime - eventTime,
-                    note: 'eventTime MUST match server-side event_time exactly for deduplication'
+                    server_time: serverTime,
+                    server_time_diff: Math.abs(currentTime - serverTime),
+                    is_stale: isStale,
+                    note: isStale ? '⚠️ Event ID was stale (from cache) - fresh one generated. Server event may not be sent if page is fully cached.' : 'eventTime MUST match server-side event_time exactly for deduplication'
                 });
             }
             
@@ -349,19 +436,51 @@ class Meta_CAPI_Pixel {
                 // options can include: eventID, eventTime, etc.
                 // This is Meta's official format for deduplication.
                 // eventTime MUST match server-side event_time exactly (Unix timestamp in seconds).
-                fbq('track', 'PageView', {}, {
-                    eventID: eventId,
-                    eventTime: eventTime
-                });
-            } catch (e) {
-                // Fallback if fbq fails - log error but still try to track with eventID only.
-                if (typeof console !== 'undefined' && console.error) {
-                    console.error('[Meta CAPI] Error tracking PageView:', e);
+                
+                // CRITICAL: Check if fbq exists before calling (may not exist on cached pages).
+                if (typeof fbq === 'undefined') {
+                    if (typeof console !== 'undefined' && console.error) {
+                        console.error('[Meta CAPI] fbq is undefined - pixel script may not have loaded', {
+                            event_id: eventId,
+                            note: 'This can happen if the page is fully cached and pixel code is missing. Check if pixel code is in page HTML.'
+                        });
+                    }
+                    return; // Can't track without fbq
                 }
-                // Fallback: Track with eventID only (deduplication may still work if event_time matches).
+                
                 fbq('track', 'PageView', {}, {
                     eventID: eventId
                 });
+                
+                if (typeof console !== 'undefined' && console.log) {
+                    console.log('[Meta CAPI] PageView fbq() call completed', {
+                        event_id: eventId,
+                        event_time: eventTime,
+                        fbq_loaded: typeof fbq !== 'undefined' && fbq.loaded !== undefined ? fbq.loaded : 'unknown'
+                    });
+                }
+            } catch (e) {
+                // Fallback if fbq fails - log error but still try to track with eventID only.
+                if (typeof console !== 'undefined' && console.error) {
+                    console.error('[Meta CAPI] Error tracking PageView:', {
+                        error: e.message,
+                        event_id: eventId,
+                        stack: e.stack
+                    });
+                }
+                // Fallback: Track with eventID only (deduplication may still work if event_time matches).
+                try {
+                fbq('track', 'PageView', {}, {
+                    eventID: eventId
+                });
+                } catch (e2) {
+                    if (typeof console !== 'undefined' && console.error) {
+                        console.error('[Meta CAPI] Failed to track PageView even with fallback', {
+                            error: e2.message,
+                            event_id: eventId
+                        });
+                    }
+                }
             }
         })(); // End self-executing function to prevent duplicate execution.
         <?php else: ?>

@@ -188,6 +188,11 @@ class Meta_CAPI {
         add_action('init', [$this, 'load_textdomain']);
         add_action('admin_notices', [$this, 'admin_notices']);
         
+        // CRITICAL: Hook into Breeze cache clearing to also clear Object Cache Pro.
+        // Breeze clears its own cache and Varnish, but doesn't automatically clear Object Cache Pro.
+        add_action('breeze_clear_all_cache', [$this, 'clear_object_cache_pro_on_breeze_clear'], 10);
+        add_action('breeze_clear_varnish', [$this, 'clear_object_cache_pro_on_breeze_clear'], 10);
+        
         // Plugin page customization.
         add_filter('plugin_action_links_' . plugin_basename(META_CAPI_PLUGIN_FILE), [$this, 'add_action_links']);
         add_filter('plugin_row_meta', [$this, 'add_row_meta'], 10, 2);
@@ -560,8 +565,27 @@ class Meta_CAPI {
         // WARNING: This can clear cached options if using persistent object cache (Redis, Memcached).
         // Only use when you're sure cached options won't be affected.
         try {
+            // CRITICAL: Clear Object Cache Pro first if available (it has its own flush method).
+            if (function_exists('wp_cache_flush_group')) {
+                // Object Cache Pro supports group-based flushing.
+                wp_cache_flush_group('default');
+            }
+            
+            // Also try Object Cache Pro's specific flush method if available.
+            if (class_exists('RedisCachePro\Plugin')) {
+                if (function_exists('wp_cache_flush')) {
+                    wp_cache_flush();
+                }
+                // Object Cache Pro also has a direct flush method.
+                if (method_exists('RedisCachePro\Plugin', 'flush')) {
+                    \RedisCachePro\Plugin::flush();
+                }
+            }
+            
+            // Standard WordPress object cache flush (works with most object cache plugins).
             wp_cache_flush();
             $results['wordpress'] = true;
+            $results['object_cache_pro'] = class_exists('RedisCachePro\Plugin');
         } catch (Exception $e) {
             // Cache flush failed, but continue with other cache clearing.
             // Log error if logger is available.
@@ -581,6 +605,48 @@ class Meta_CAPI {
         do_action('meta_capi_cache_cleared', $results);
 
         return $results;
+    }
+
+    /**
+     * Clear Object Cache Pro when Breeze clears its cache.
+     * Breeze clears internal cache and Varnish, but doesn't automatically clear Object Cache Pro.
+     * This hook ensures Object Cache Pro is also cleared when Breeze cache is purged.
+     *
+     * @return void
+     */
+    public function clear_object_cache_pro_on_breeze_clear(): void {
+        // Only clear if Object Cache Pro is active.
+        if (!class_exists('RedisCachePro\Plugin') && !function_exists('wp_cache_flush')) {
+            return;
+        }
+
+        try {
+            // Try Object Cache Pro's specific flush method first.
+            if (class_exists('RedisCachePro\Plugin')) {
+                if (function_exists('wp_cache_flush')) {
+                    wp_cache_flush();
+                }
+                // Object Cache Pro also has a direct flush method if available.
+                if (method_exists('RedisCachePro\Plugin', 'flush')) {
+                    \RedisCachePro\Plugin::flush();
+                }
+            } else {
+                // Standard WordPress object cache flush.
+                wp_cache_flush();
+            }
+
+            // Log if logger is available.
+            if (isset($this->logger)) {
+                $this->logger->info('Object Cache Pro cleared automatically (triggered by Breeze cache clear)', [
+                    'object_cache_pro_active' => class_exists('RedisCachePro\Plugin'),
+                ]);
+            }
+        } catch (Exception $e) {
+            // Log error if logger is available, but don't break Breeze's cache clearing.
+            if (isset($this->logger)) {
+                $this->logger->warning('Failed to clear Object Cache Pro on Breeze cache clear: ' . $e->getMessage());
+            }
+        }
     }
 
     /**

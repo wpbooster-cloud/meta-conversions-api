@@ -65,6 +65,13 @@ class Meta_CAPI_WooCommerce {
      * @var string
      */
     private static string $viewcontent_event_id = '';
+    
+    /**
+     * Track if ViewContent has been tracked in this request (prevents duplicates).
+     *
+     * @var bool
+     */
+    private static bool $viewcontent_tracked_global = false;
 
     /**
      * InitiateCheckout event ID (generated early for browser coordination).
@@ -72,6 +79,13 @@ class Meta_CAPI_WooCommerce {
      * @var string
      */
     private static string $initiatecheckout_event_id = '';
+
+    /**
+     * InitiateCheckout duplicate prevention flag (global across all instances).
+     *
+     * @var bool
+     */
+    private static bool $initiatecheckout_tracked_global = false;
 
     /**
      * AddToCart event IDs (keyed by product ID) for browser retrieval via AJAX fragments.
@@ -307,17 +321,61 @@ class Meta_CAPI_WooCommerce {
      * @return array<string, mixed> Event data array.
      */
     private function build_purchase_event_data(WC_Order $order): array {
+        // CRITICAL: Use current time (thank-you page load) to match browser Pixel timing.
+        // Browser fires Purchase event immediately on thank-you page load.
+        // Using current time ensures exact matching for deduplication.
+        // Note: Order creation time may be significantly earlier if there's a delay between checkout and thank-you page.
+        $event_time = time();
+        
+        // Build user data BEFORE creating event data (capture at request time).
+        $user_data = $this->build_user_data($order);
+        
+        // CRITICAL: Log user data for deduplication debugging.
+        // Meta uses IP, User Agent, fbp cookie, and country for matching.
+        $this->logger->log('Purchase user_data captured (for deduplication)', 'info', [
+            'order_id' => $order->get_id(),
+            'event_id' => $this->coordinator->generate_event_id('purchase', (string) $order->get_id(), false),
+            'user_data_keys' => array_keys($user_data),
+            'has_ip' => !empty($user_data['client_ip_address']),
+            'ip_value' => !empty($user_data['client_ip_address']) ? $user_data['client_ip_address'] : 'MISSING',
+            'has_user_agent' => !empty($user_data['client_user_agent']),
+            'user_agent_preview' => !empty($user_data['client_user_agent']) ? substr($user_data['client_user_agent'], 0, 100) . '...' : 'MISSING',
+            'has_fbp' => !empty($user_data['fbp']),
+            'fbp_preview' => !empty($user_data['fbp']) ? substr($user_data['fbp'], 0, 30) . '...' : 'MISSING',
+            'has_fbc' => !empty($user_data['fbc']),
+            'has_email' => !empty($user_data['em']),
+            'has_phone' => !empty($user_data['ph']),
+            'has_name' => !empty($user_data['fn']) || !empty($user_data['ln']),
+            'note' => 'Compare these values with browser console logs - they MUST match for deduplication'
+        ]);
+        
+        // CRITICAL: Use actual current URL (not get_checkout_order_received_url()) to match browser's window.location.href.
+        // Meta Pixel automatically uses window.location.href as event_source_url, so server must match it exactly.
+        // This includes query parameters, trailing slashes, etc. for perfect deduplication.
+        $event_source_url = $this->get_current_request_url();
+        
         $event_data = [
             'event_name'       => 'Purchase',
-            'event_time'       => time(),
+            'event_time'       => $event_time,
             // Generate event ID for deduplication using Coordinator (ensures consistency with browser-side).
             // Purchase events use order ID only (no timestamp) for exact matching.
             'event_id'         => $this->coordinator->generate_event_id('purchase', (string) $order->get_id(), false),
-            'event_source_url' => $order->get_checkout_order_received_url(),
+            'event_source_url' => $event_source_url, // Use actual current URL to match browser
             'action_source'    => 'website',
-            'user_data'        => $this->build_user_data($order),
+            'user_data'        => $user_data, // Use captured user_data
             'custom_data'      => $this->build_custom_data($order),
         ];
+
+        $order_date = $order->get_date_created();
+        $this->logger->log('Purchase event data prepared', 'debug', [
+            'order_id' => $order->get_id(),
+            'event_time' => $event_time,
+            'event_time_formatted' => date('Y-m-d H:i:s', $event_time),
+            'order_date' => $order_date ? $order_date->format('Y-m-d H:i:s') : 'not available',
+            'order_date_timestamp' => $order_date ? $order_date->getTimestamp() : 'not available',
+            'time_difference_seconds' => $order_date ? ($event_time - $order_date->getTimestamp()) : 'N/A',
+            'note' => 'Using current time (thank-you page load) to match browser Pixel timing',
+        ]);
 
         return $event_data;
     }
@@ -462,31 +520,37 @@ class Meta_CAPI_WooCommerce {
         if (!is_checkout() || is_order_received_page()) {
             return;
         }
-
+        
         // Skip if user is admin.
         if (current_user_can('manage_options') && apply_filters('meta_capi_skip_admin_tracking', true)) {
             return;
         }
-
+        
         // Get cart data.
         $cart = WC()->cart;
         if (!$cart || $cart->is_empty()) {
             return;
         }
-
+        
+        // CRITICAL: Only generate if not already set (prevent overwriting fallback from track_initiate_checkout).
+        // If track_initiate_checkout() ran first and generated a fallback, use that instead of generating a new one.
+        if (!empty(self::$initiatecheckout_event_id)) {
+            return; // Event ID already exists, don't regenerate.
+        }
+        
         // Generate event ID ONCE for both Pixel and CAPI.
         $session_id = $this->get_wc_session_id();
         $event_id = $this->coordinator->generate_event_id('checkout', $session_id, true);
         
         // Store in static property for later use.
         self::$initiatecheckout_event_id = $event_id;
-
+        
         $this->logger->log('InitiateCheckout event ID generated', 'info', [
             'event_id' => $event_id,
             'session_id' => $session_id,
         ]);
     }
-
+    
     /**
      * Get InitiateCheckout event ID for browser coordination.
      *
@@ -523,6 +587,18 @@ class Meta_CAPI_WooCommerce {
                 return;
             }
 
+            // CRITICAL: Prevent duplicate tracking across all instances (global static flag).
+            if (self::$initiatecheckout_tracked_global) {
+                $this->logger->log('InitiateCheckout already tracked in this request, skipping duplicate', 'warning', [
+                    'event_id' => self::$initiatecheckout_event_id,
+                    'hook' => current_filter(),
+                ]);
+                return;
+            }
+            
+            // Set flag IMMEDIATELY to prevent race conditions.
+            self::$initiatecheckout_tracked_global = true;
+
             $this->logger->log('Tracking InitiateCheckout event', 'info');
 
             // Get event ID from early generation (should already be set).
@@ -536,33 +612,68 @@ class Meta_CAPI_WooCommerce {
                 $this->logger->log('InitiateCheckout event ID generated in fallback', 'warning', ['event_id' => $event_id]);
             }
 
-            // CRITICAL: Extract timestamp from event_id to ensure exact match with browser Pixel timing.
-            // Event ID format: checkout_{session_id}_{timestamp_ms} where timestamp is in milliseconds.
-            // We extract this timestamp and convert to seconds for event_time to ensure perfect alignment.
-            // Meta deduplicates based on matching event_id AND event_time, so they must match exactly.
-            $event_time = $this->extract_timestamp_from_event_id($event_id);
+            // CRITICAL: Use current time (not extracted from event_id) to match browser Pixel timing.
+            // Browser fires immediately on checkout page load, so server should use current time.
+            // Event ID contains timestamp for browser extraction, but event_time should be current
+            // to match Meta Pixel's immediate firing (similar to Lead event pattern which works consistently).
+            // Note: Event ID timestamp is still used by browser for extraction, but server event_time
+            // uses current time to ensure exact matching with browser's immediate firing.
+            $event_time = time();
             
-            // Fallback to current time if extraction fails (shouldn't happen).
-            if ($event_time === 0) {
-                $event_time = time();
-                $this->logger->log('Failed to extract timestamp from event_id, using current time', 'warning', [
-                    'event_id' => $event_id,
-                    'event_time' => $event_time,
-                ]);
+            // Log extracted timestamp for comparison (for debugging).
+            $extracted_time = $this->extract_timestamp_from_event_id($event_id);
+            if ($extracted_time > 0) {
+                $time_diff = $event_time - $extracted_time;
+                if (abs($time_diff) > 5) {
+                    $this->logger->log('InitiateCheckout: Using current time instead of extracted timestamp (Lead pattern)', 'info', [
+                        'event_id' => $event_id,
+                        'event_time_current' => $event_time,
+                        'event_time_extracted' => $extracted_time,
+                        'time_difference_seconds' => $time_diff,
+                        'note' => 'Using current time to match browser immediate firing (like Lead events)',
+                    ]);
+                }
             }
 
+            // Build user data BEFORE creating event data (capture at request time).
+            $user_data = $this->build_user_data_from_session();
+            
+            // CRITICAL: Log user data for deduplication debugging.
+            // Meta uses IP, User Agent, fbp cookie, and country for matching.
+            $this->logger->log('InitiateCheckout user_data captured (for deduplication)', 'info', [
+                'event_id' => $event_id,
+                'user_data_keys' => array_keys($user_data),
+                'has_ip' => !empty($user_data['client_ip_address']),
+                'ip_value' => !empty($user_data['client_ip_address']) ? $user_data['client_ip_address'] : 'MISSING',
+                'has_user_agent' => !empty($user_data['client_user_agent']),
+                'user_agent_preview' => !empty($user_data['client_user_agent']) ? substr($user_data['client_user_agent'], 0, 100) . '...' : 'MISSING',
+                'has_fbp' => !empty($user_data['fbp']),
+                'fbp_preview' => !empty($user_data['fbp']) ? substr($user_data['fbp'], 0, 30) . '...' : 'MISSING',
+                'has_fbc' => !empty($user_data['fbc']),
+                'has_email' => !empty($user_data['em']),
+                'has_phone' => !empty($user_data['ph']),
+                'note' => 'Compare these values with browser console logs - they MUST match for deduplication'
+                ]);
+
+            // CRITICAL: Use actual current URL (not wc_get_checkout_url()) to match browser's window.location.href.
+            // Meta Pixel automatically uses window.location.href as event_source_url, so server must match it exactly.
+            // This includes query parameters, trailing slashes, etc. for perfect deduplication.
+            $event_source_url = $this->get_current_request_url();
+            
             // Build event data.
             $event_data = [
                 'event_name'       => 'InitiateCheckout',
-                'event_time'       => $event_time, // Use current time to match browser Pixel timing
+                'event_time'       => $event_time, // Extracted from event_id to match browser exactly
                 'event_id'         => $event_id,
-                'event_source_url' => wc_get_checkout_url(),
+                'event_source_url' => $event_source_url, // Use actual current URL to match browser
                 'action_source'    => 'website',
-                'user_data'        => $this->build_user_data_from_session(),
+                'user_data'        => $user_data, // Use captured user_data
                 'custom_data'      => $this->build_cart_custom_data($cart),
             ];
 
-            // Send to Facebook asynchronously to avoid blocking page load.
+            // CRITICAL: Send InitiateCheckout event via wp_footer hook for better deduplication timing.
+            // Browser Pixel fires immediately, so server should too (within seconds, not minutes).
+            // wp_footer hook runs after page content but before shutdown, ensuring fast processing.
             $this->send_event_async($event_data);
 
         } catch (Exception $e) {
@@ -586,6 +697,14 @@ class Meta_CAPI_WooCommerce {
      * @param array  $cart_item_data Cart item data.
      * @return void
      */
+    /**
+     * Static flag to prevent duplicate AddToCart tracking in the same request.
+     * Key: cart_item_key (WooCommerce generates unique keys per cart item).
+     *
+     * @var array<string, bool>
+     */
+    private static array $addtocart_tracked = [];
+
     public function track_add_to_cart(
         string $cart_item_key,
         int $product_id,
@@ -600,6 +719,19 @@ class Meta_CAPI_WooCommerce {
                 return;
             }
 
+            // CRITICAL: Prevent duplicate tracking in the same request.
+            // The woocommerce_add_to_cart hook can fire multiple times (AJAX + fragments refresh).
+            // Use cart_item_key as unique identifier (WooCommerce generates unique keys per cart item).
+            if (isset(self::$addtocart_tracked[$cart_item_key])) {
+                $this->logger->log('AddToCart already tracked for this cart item in this request, skipping duplicate', 'warning', [
+                    'cart_item_key' => $cart_item_key,
+                    'product_id' => $product_id,
+                    'quantity' => $quantity,
+                ]);
+                return;
+            }
+            self::$addtocart_tracked[$cart_item_key] = true;
+
             // Use variation ID if available, otherwise use product ID.
             $effective_product_id = $variation_id > 0 ? $variation_id : $product_id;
             
@@ -613,6 +745,7 @@ class Meta_CAPI_WooCommerce {
             $this->logger->log('Tracking AddToCart event', 'info', [
                 'product_id' => $effective_product_id,
                 'quantity'   => $quantity,
+                'cart_item_key' => $cart_item_key,
             ]);
 
             // Get or generate event ID for deduplication.
@@ -624,27 +757,45 @@ class Meta_CAPI_WooCommerce {
             // Traditional form submissions use pre-generated IDs from product page.
             self::$addtocart_event_ids[(string) $effective_product_id] = $event_id;
 
-            // CRITICAL: Extract timestamp from event_id to ensure exact match with browser Pixel timing.
-            // Event ID format: addtocart_{product_id}_{timestamp_ms} where timestamp is in milliseconds.
-            // We extract this timestamp and convert to seconds for event_time to ensure perfect alignment.
-            // Meta deduplicates based on matching event_id AND event_time, so they must match exactly.
-            $event_time = $this->extract_timestamp_from_event_id($event_id);
+            // CRITICAL: Use current time (not extracted from event_id) to match browser Pixel timing.
+            // Browser fires immediately when add-to-cart button is clicked, so server should use current time.
+            // Event ID contains timestamp for browser extraction, but event_time should be current
+            // to match Meta Pixel's immediate firing (similar to Lead event pattern which works consistently).
+            // Note: Event ID timestamp is still used by browser for extraction, but server event_time
+            // uses current time to ensure exact matching with browser's immediate firing.
+            $event_time = time();
             
-            // Fallback to current time if extraction fails (shouldn't happen).
-            if ($event_time === 0) {
-                $event_time = time();
-                $this->logger->log('Failed to extract timestamp from event_id, using current time', 'warning', [
-                    'event_id' => $event_id,
-                    'event_time' => $event_time,
-                ]);
+            // Log extracted timestamp for comparison (for debugging).
+            $extracted_time = $this->extract_timestamp_from_event_id($event_id);
+            if ($extracted_time > 0) {
+                $time_diff = $event_time - $extracted_time;
+                if (abs($time_diff) > 5) {
+                    $this->logger->log('AddToCart: Using current time instead of extracted timestamp (Lead pattern)', 'info', [
+                        'event_id' => $event_id,
+                        'event_time_current' => $event_time,
+                        'event_time_extracted' => $extracted_time,
+                        'time_difference_seconds' => $time_diff,
+                        'note' => 'Using current time to match browser immediate firing (like Lead events)',
+                    ]);
+                }
             }
 
+            // CRITICAL: Use HTTP_REFERER for AJAX requests to match browser's window.location.href exactly.
+            // Browser Pixel uses window.location.href (the page where button was clicked), not the AJAX endpoint.
+            // For AJAX add-to-cart, get_current_request_url() returns the AJAX endpoint (?wc-ajax=add_to_cart),
+            // but we need the actual page URL where the user clicked "Add to Cart".
+            if (wp_doing_ajax() && !empty($_SERVER['HTTP_REFERER'])) {
+                $event_source_url = sanitize_text_field(wp_unslash($_SERVER['HTTP_REFERER']));
+            } else {
+                $event_source_url = $this->get_current_request_url();
+            }
+            
             // Build event data.
             $event_data = [
                 'event_name'       => 'AddToCart',
                 'event_time'       => $event_time, // Use current time to match browser Pixel timing
                 'event_id'         => $event_id,
-                'event_source_url' => get_permalink($product_id),
+                'event_source_url' => $event_source_url, // Use referrer or product page URL
                 'action_source'    => 'website',
                 'user_data'        => $this->build_user_data_from_session(),
                 'custom_data'      => [
@@ -663,7 +814,10 @@ class Meta_CAPI_WooCommerce {
                 ],
             ];
 
-            // Send to Facebook asynchronously to avoid blocking page load.
+            // CRITICAL: Send AddToCart event via wp_footer hook (or synchronously for AJAX) for better deduplication timing.
+            // Browser Pixel fires immediately, so server should too (within seconds, not minutes).
+            // wp_footer hook runs after page content but before shutdown, ensuring fast processing.
+            // AJAX requests send synchronously since wp_footer doesn't fire.
             $this->send_event_async($event_data);
 
         } catch (Exception $e) {
@@ -691,12 +845,34 @@ class Meta_CAPI_WooCommerce {
             $latest_event_id = end($event_ids);
             $product_id = array_key_last(self::$addtocart_event_ids);
             
-            // Add event ID to fragments for JavaScript to retrieve.
+            // CRITICAL: Get the page URL where add-to-cart occurred (for deduplication).
+            // Meta uses event_source_url as part of deduplication matching.
+            // Browser Pixel uses window.location.href, so server must match it.
+            // Use referrer if available (the page where button was clicked), otherwise product page.
+            $product_url = get_permalink($product_id); // Default to product page
+            if (!empty($_SERVER['HTTP_REFERER'])) {
+                $referrer = esc_url_raw(wp_unslash($_SERVER['HTTP_REFERER']));
+                $site_url = home_url();
+                // Only use referrer if it's from the same domain (security).
+                if (strpos($referrer, $site_url) === 0) {
+                    $product_url = $referrer;
+                }
+            }
+            
+            // Add event ID, product URL, product price, and product name to fragments for JavaScript to retrieve.
             // Use a hidden div that JavaScript can read from.
+            // CRITICAL: Include product price and name so browser can match server's values for deduplication.
+            $product = wc_get_product($product_id);
+            $product_price = $product ? (float) $product->get_price() : 0;
+            $product_name = $product ? $product->get_name() : '';
+            
             $fragments['meta_capi_addtocart_event_id'] = sprintf(
-                '<div id="meta-capi-addtocart-event-id" data-event-id="%s" data-product-id="%s" style="display:none;"></div>',
+                '<div id="meta-capi-addtocart-event-id" data-event-id="%s" data-product-id="%s" data-product-url="%s" data-product-price="%s" data-product-name="%s" style="display:none;"></div>',
                 esc_attr($latest_event_id),
-                esc_attr($product_id)
+                esc_attr($product_id),
+                esc_attr($product_url),
+                esc_attr($product_price),
+                esc_attr($product_name)
             );
             
             // Clear the stored event ID after use (prevent reuse).
@@ -739,7 +915,7 @@ class Meta_CAPI_WooCommerce {
 
         $this->logger->log('ViewContent event ID generated', 'info', [
             'event_id' => $event_id,
-            'product_id' => $product_id,
+                'product_id' => $product_id,
         ]);
     }
 
@@ -763,7 +939,7 @@ class Meta_CAPI_WooCommerce {
         if (!is_product()) {
             return;
         }
-
+        
         // Skip if user is admin.
         if (current_user_can('manage_options') && apply_filters('meta_capi_skip_admin_tracking', true)) {
             return;
@@ -774,7 +950,7 @@ class Meta_CAPI_WooCommerce {
         if (!$product || !is_a($product, 'WC_Product')) {
             return;
         }
-
+        
         $product_id = $product->get_id();
 
         // Generate event ID for the main product.
@@ -792,7 +968,7 @@ class Meta_CAPI_WooCommerce {
                 }
             }
         }
-
+        
         $this->logger->log('AddToCart event IDs generated for product page', 'info', [
             'product_id' => $product_id,
             'event_ids_generated' => count(self::$form_addtocart_event_ids),
@@ -843,6 +1019,30 @@ class Meta_CAPI_WooCommerce {
      */
     public function track_view_content(): void {
         try {
+            // CRITICAL: Only track on actual product page views, not AJAX requests or cached pages.
+            // Skip AJAX, cron, and admin requests.
+            // Also check REQUEST_URI for AJAX endpoints (wp_doing_ajax() may not catch all cases).
+            $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+            $is_ajax_endpoint = wp_doing_ajax() || 
+                               (strpos($request_uri, 'wc-ajax=') !== false) ||
+                               (strpos($request_uri, 'admin-ajax.php') !== false);
+            
+            if ($is_ajax_endpoint || wp_doing_cron() || is_admin()) {
+                if ($is_ajax_endpoint) {
+                    $this->logger->log('ViewContent skipped - AJAX request detected', 'info', [
+                        'request_uri' => $request_uri,
+                        'wp_doing_ajax' => wp_doing_ajax(),
+                    ]);
+                }
+                return;
+            }
+            
+            // CRITICAL: Only track on actual single product pages.
+            // The woocommerce_after_single_product hook can fire in other contexts (AJAX, widgets, etc.).
+            if (!is_product() || is_order_received_page()) {
+                return;
+            }
+            
             // Skip if user is admin (prevents polluting data).
             if (current_user_can('manage_options') && apply_filters('meta_capi_skip_admin_tracking', true)) {
                 return;
@@ -856,6 +1056,19 @@ class Meta_CAPI_WooCommerce {
             }
 
             $product_id = $product->get_id();
+            
+            // CRITICAL: Prevent duplicate tracking in the same request.
+            // The woocommerce_after_single_product hook can fire multiple times or on AJAX requests.
+            if (self::$viewcontent_tracked_global) {
+                $this->logger->log('ViewContent already tracked in this request, skipping duplicate', 'warning', [
+                    'product_id' => $product_id,
+                    'event_id' => self::$viewcontent_event_id,
+                ]);
+                return;
+            }
+            
+            // Set flag IMMEDIATELY to prevent race conditions.
+            self::$viewcontent_tracked_global = true;
 
             $this->logger->log('Tracking ViewContent event', 'info', ['product_id' => $product_id]);
 
@@ -909,7 +1122,9 @@ class Meta_CAPI_WooCommerce {
                 ],
             ];
 
-            // Send to Facebook asynchronously to avoid blocking page load.
+            // CRITICAL: Send ViewContent event via wp_footer hook for better deduplication timing.
+            // Browser Pixel fires immediately, so server should too (within seconds, not minutes).
+            // wp_footer hook runs after page content but before shutdown, ensuring fast processing.
             $this->send_event_async($event_data);
 
         } catch (Exception $e) {
@@ -962,13 +1177,13 @@ class Meta_CAPI_WooCommerce {
         $ip = '';
 
         // Check for proxy headers (in order of trust).
-        // Priority order: HTTP_CLIENT_IP before HTTP_X_REAL_IP for universal compatibility.
-        // HTTP_X_REAL_IP is Nginx-specific, while HTTP_CLIENT_IP is more universally supported.
+        // CRITICAL: Priority order must match browser-side detection for deduplication.
+        // For Cloudflare sites, browser events use CF-Connecting-IP, so server must check it first.
         $headers = [
-            'HTTP_CF_CONNECTING_IP', // Cloudflare (most trusted when using CF).
-            'HTTP_CLIENT_IP',        // Universal proxy header (check before Nginx-specific).
-            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (Nginx-specific, check after HTTP_CLIENT_IP).
-            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check last.
+            'HTTP_CF_CONNECTING_IP', // Cloudflare (MUST be first for CF sites - browser uses this).
+            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (check second).
+            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check third.
+            'HTTP_CLIENT_IP',        // Some proxies set this (check after X-Forwarded-For).
             'REMOTE_ADDR',           // Fallback (proxy IP, not client IP).
         ];
 
@@ -977,10 +1192,10 @@ class Meta_CAPI_WooCommerce {
                 $ip = sanitize_text_field(wp_unslash($_SERVER[$header]));
                 
                 // If X-Forwarded-For, take the first IP.
-                if (strpos($ip, ',') !== false) {
-                    $ips = explode(',', $ip);
+            if (strpos($ip, ',') !== false) {
+                $ips = explode(',', $ip);
                     $ip  = trim($ips[0]);
-                }
+            }
                 
                 break;
             }
@@ -988,7 +1203,7 @@ class Meta_CAPI_WooCommerce {
 
         // Validate IP address.
         if (filter_var($ip, FILTER_VALIDATE_IP)) {
-            return $ip;
+        return $ip;
         }
 
         return '0.0.0.0';
@@ -1163,7 +1378,7 @@ class Meta_CAPI_WooCommerce {
     /**
      * Extract timestamp from event ID and convert to seconds.
      * Event ID format: {eventtype}_{identifier}_{timestamp_ms}
-     * 
+     *
      * @param string $event_id Event ID with embedded timestamp.
      * @return int Timestamp in seconds, or 0 if extraction fails.
      */
@@ -1190,28 +1405,134 @@ class Meta_CAPI_WooCommerce {
     }
 
     /**
-     * Send event asynchronously using WordPress cron.
+     * Send event asynchronously using WordPress wp_footer hook (for page loads) or synchronously (for AJAX).
      * 
      * CRITICAL: User data (IP, user agent, cookies) must be captured BEFORE scheduling,
-     * as cron runs in a different context without access to original request data.
+     * as wp_footer hook runs after page content but still has access to original request data.
      *
      * @param array $event_data Event data (must include complete user_data).
      */
     private function send_event_async(array $event_data): void {
         if (!empty($event_data) && is_array($event_data)) {
             // Ensure user_data is complete before scheduling (captured from original request).
-            // The async handler will use this stored user_data, not try to detect it from cron context.
             if (empty($event_data['user_data']) || !isset($event_data['user_data']['client_ip_address'])) {
                 $this->logger->warning('Event scheduled without complete user_data - deduplication may fail', [
                     'event_name' => $event_data['event_name'] ?? 'unknown',
                 ]);
             }
             
-            wp_schedule_single_event(time(), 'meta_capi_send_event', [$event_data]);
-            // Don't call spawn_cron() - WordPress cron will process scheduled events automatically
-            // Calling spawn_cron() can cause blocking/timeout issues on some servers
-            // Events will be processed on the next cron run (usually within 1 minute)
+            // Prevent duplicate sends using event_id + event_time.
+            $event_id = $event_data['event_id'] ?? '';
+            $event_time = $event_data['event_time'] ?? 0;
+            $dedupe_key = $event_id . '_' . $event_time;
+            
+            // Check if we've already sent this exact event.
+            if (isset($GLOBALS['meta_capi_sent_events'][$dedupe_key])) {
+                $this->logger->log('Event already sent, skipping duplicate', 'warning', [
+                    'event_id' => $event_id,
+                    'event_time' => $event_time,
+                    'dedupe_key' => $dedupe_key,
+                ]);
+                return;
+            }
+            
+            // CRITICAL: For AJAX requests, send synchronously (wp_footer doesn't fire on AJAX).
+            // For regular page loads, use wp_footer hook (non-blocking).
+            if (wp_doing_ajax()) {
+                // AJAX request - send immediately (synchronously but non-blocking for user).
+                $this->logger->log('Sending event synchronously (AJAX request)', 'info', [
+                    'event_name' => $event_data['event_name'] ?? 'unknown',
+                    'event_id' => $event_id,
+                    'note' => 'AJAX requests don\'t have wp_footer hook, sending immediately',
+                ]);
+                
+                // Mark as sent to prevent duplicates.
+                $GLOBALS['meta_capi_sent_events'][$dedupe_key] = true;
+                
+                // Send immediately.
+                $result = $this->client->send_event($event_data);
+                
+                $this->logger->log('Event sent synchronously (AJAX)', 'info', [
+                    'event_id' => $event_id,
+                    'success' => $result['success'] ?? false,
+                    'message' => $result['message'] ?? 'unknown',
+                ]);
+            } else {
+                // Regular page load - use wp_footer hook (non-blocking).
+                // Check if we've already queued this exact event for sending.
+                if (isset($GLOBALS['meta_capi_queued_events'][$dedupe_key])) {
+                    $this->logger->log('Event already queued for wp_footer, skipping duplicate registration', 'warning', [
+                        'event_id' => $event_id,
+                        'event_time' => $event_time,
+                        'dedupe_key' => $dedupe_key,
+                    ]);
+                    return;
+                }
+                
+                // Mark this event as queued to prevent duplicate hook registrations.
+                $GLOBALS['meta_capi_queued_events'] = $GLOBALS['meta_capi_queued_events'] ?? [];
+                $GLOBALS['meta_capi_queued_events'][$dedupe_key] = true;
+                
+                // Use wp_footer hook to send event after page content but before shutdown (faster than shutdown).
+                // This is more reliable than wp_schedule_single_event() which depends on cron.
+                add_action('wp_footer', function() use ($event_data) {
+                    // Create fresh instances to avoid any state issues.
+                    $logger = new Meta_CAPI_Logger();
+                    $client = new Meta_CAPI_Client($logger);
+                    
+                    // Prevent duplicate sends using event_id + event_time.
+                    $event_id = $event_data['event_id'] ?? '';
+                    $event_time = $event_data['event_time'] ?? 0;
+                    $dedupe_key = $event_id . '_' . $event_time;
+                    
+                    if (isset($GLOBALS['meta_capi_sent_events'][$dedupe_key])) {
+                        $logger->log('Duplicate event prevented in wp_footer handler', 'warning', [
+                            'dedupe_key' => $dedupe_key,
+                            'event_id' => $event_id,
+                        ]);
+                        return;
+                    }
+                    $GLOBALS['meta_capi_sent_events'][$dedupe_key] = true;
+                    
+                    $logger->log('Processing event via wp_footer hook - sending to CAPI', 'info', [
+                        'event_name' => $event_data['event_name'] ?? 'unknown',
+                        'event_id' => $event_id,
+                        'event_time' => $event_time,
+                    ]);
+                    
+                    $result = $client->send_event($event_data);
+                    
+                    $logger->log('Event processing completed via wp_footer hook', 'info', [
+                        'event_id' => $event_id,
+                        'success' => $result['success'] ?? false,
+                        'message' => $result['message'] ?? 'unknown',
+                    ]);
+                }, 999); // High priority to run late in footer but before shutdown.
+                
+                $this->logger->log('Event queued for wp_footer hook processing', 'info', [
+                    'event_name' => $event_data['event_name'] ?? 'unknown',
+                    'event_id' => $event_data['event_id'] ?? 'missing',
+                    'note' => 'Event will be sent in footer (faster than shutdown)',
+                ]);
+            }
         }
+    }
+    
+    /**
+     * Get current request URL to match browser's window.location.href.
+     * 
+     * CRITICAL: This must match exactly what the browser sends (including query params, trailing slashes).
+     * Meta Pixel automatically uses window.location.href as event_source_url for deduplication.
+     * 
+     * @return string Current request URL.
+     */
+    private function get_current_request_url(): string {
+        if (isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+            return $protocol . sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])) . sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI']));
+        }
+        // Fallback to WooCommerce checkout URL if server vars not available.
+        return wc_get_checkout_url();
     }
 }
 

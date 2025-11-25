@@ -27,3 +27,12 @@ PROJECT-SUMMARY.md
 DEVELOPER-GUIDE.md
 QUICK-REFERENCE.md
 INSTALLATION.md
+
+# Environment and credentials
+.env
+.env.*
+*.env
+*credentials*.txt
+*credentials*.md
+*secrets*.txt
+*secrets*.md

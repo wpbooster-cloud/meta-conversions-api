@@ -306,15 +306,26 @@ class Meta_CAPI_Scripts {
     private function enqueue_wc_events_script(): void {
         $suffix = $this->debug_mode ? '' : '.min';
         
+        // Build dependencies array - jQuery is required, meta-capi-pixel is optional.
+        // Note: woocommerce-events.js doesn't actually use meta_capi_config or pixel script globals,
+        // but we include it as optional dependency if pixel script is loaded for consistency.
+        $dependencies = ['jquery'];
+        if (wp_script_is('meta-capi-pixel', 'enqueued') || $this->should_load_pixel_script()) {
+            $dependencies[] = 'meta-capi-pixel';
+        }
+        
         wp_enqueue_script(
             'meta-capi-wc-events',
             META_CAPI_PLUGIN_URL . 'assets/js/woocommerce-events' . $suffix . '.js',
-            ['jquery', 'meta-capi-pixel'], // CRITICAL: Depends on meta-capi-pixel for window.metaCAPI_pageViewEventId and other globals
+            $dependencies,
             META_CAPI_VERSION,
             true // Load in footer
         );
 
-        $this->logger->log('WooCommerce events script enqueued', 'info', ['suffix' => $suffix]);
+        $this->logger->log('WooCommerce events script enqueued', 'info', [
+            'suffix' => $suffix,
+            'dependencies' => $dependencies,
+        ]);
     }
 
     /**
@@ -492,8 +503,18 @@ class Meta_CAPI_Scripts {
                     $initiatecheckout_event_id = Meta_CAPI_WooCommerce::get_initiatecheckout_event_id();
                 }
 
+                // Build content_name (comma-separated product names) to match server-side format.
+                $content_names = [];
+                foreach ($cart->get_cart() as $cart_item) {
+                    $product = $cart_item['data'];
+                    if ($product) {
+                        $content_names[] = $product->get_name();
+                    }
+                }
+                
                 $data['cart'] = [
                     'content_ids' => $content_ids,
+                    'content_name' => implode(', ', $content_names), // Match server-side format for deduplication.
                     'contents' => $contents,
                     'value' => (float) $cart->get_total('edit'),
                     'currency' => get_woocommerce_currency(),
@@ -541,13 +562,29 @@ class Meta_CAPI_Scripts {
                         }
                     }
 
+                    // CRITICAL: Include order creation timestamp for event_time matching.
+                    // Server uses order creation time, browser must use the same for deduplication.
+                    $order_date = $order->get_date_created();
+                    $order_timestamp = $order_date ? $order_date->getTimestamp() : time();
+                    
+                    // Build content_name (comma-separated product names) to match server-side format.
+                    $content_names = [];
+                    foreach ($order->get_items() as $item) {
+                        $product = $item->get_product();
+                        if ($product) {
+                            $content_names[] = $product->get_name();
+                        }
+                    }
+                    
                     $data['order'] = [
                         'id' => (string) $order->get_id(),
                         'content_ids' => $content_ids,
+                        'content_name' => implode(', ', $content_names), // Match server-side format for deduplication.
                         'contents' => $contents,
                         'value' => (float) $order->get_total(),
                         'currency' => $order->get_currency(),
                         'num_items' => $order->get_item_count(),
+                        'event_time' => $order_timestamp, // Order creation timestamp for deduplication
                     ];
                 }
             }

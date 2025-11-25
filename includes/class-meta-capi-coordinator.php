@@ -295,13 +295,13 @@ class Meta_CAPI_Coordinator {
         $ip = '';
 
         // Check for proxy headers (in order of trust).
-        // Priority order: HTTP_CLIENT_IP before HTTP_X_REAL_IP for universal compatibility.
-        // HTTP_X_REAL_IP is Nginx-specific, while HTTP_CLIENT_IP is more universally supported.
+        // CRITICAL: Priority order must match browser-side detection for deduplication.
+        // For Cloudflare sites, browser events use CF-Connecting-IP, so server must check it first.
         $headers = [
-            'HTTP_CF_CONNECTING_IP', // Cloudflare (most trusted when using CF).
-            'HTTP_CLIENT_IP',        // Universal proxy header (check before Nginx-specific).
-            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (Nginx-specific, check after HTTP_CLIENT_IP).
-            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check last.
+            'HTTP_CF_CONNECTING_IP', // Cloudflare (MUST be first for CF sites - browser uses this).
+            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (check second).
+            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check third.
+            'HTTP_CLIENT_IP',        // Some proxies set this (check after X-Forwarded-For).
             'REMOTE_ADDR',           // Fallback (proxy IP, not client IP).
         ];
 

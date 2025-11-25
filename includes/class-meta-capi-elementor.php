@@ -151,11 +151,35 @@ class Meta_CAPI_Elementor {
             'fields' => $field_titles,
         ]);
 
-        // Prepare user data from form fields.
+        // CRITICAL: Prepare user data to match what Meta Pixel automatically sends.
+        // Meta Pixel automatically sends: IP address, User agent, fbp cookie (Browser id), fbc cookie.
+        // For deduplication, server MUST send the same fields.
+        // Form fields (email, phone, name) are additional but should not replace the core matching fields.
         $user_data = $this->extract_user_data_from_form($fields);
+        
+        // CRITICAL: Add the core matching fields that Meta Pixel automatically sends.
+        // These are REQUIRED for deduplication - IP, user agent, and fbp/fbc cookies.
+        // Without these, Meta cannot match browser and server events.
+        $user_data['client_ip_address'] = $this->get_client_ip();
+        $user_data['client_user_agent'] = $this->get_user_agent();
+        
+        // Add Facebook cookies (fbp = Browser id, fbc = Click id).
+        // These are critical for deduplication.
+        if (!empty($_COOKIE['_fbp'])) {
+            $user_data['fbp'] = sanitize_text_field(wp_unslash($_COOKIE['_fbp']));
+        }
+        if (!empty($_COOKIE['_fbc'])) {
+            $user_data['fbc'] = sanitize_text_field(wp_unslash($_COOKIE['_fbc']));
+        }
 
-        // Prepare custom data.
+        // CRITICAL: Prepare custom data to match browser format exactly for deduplication.
+        // Browser sends: content_name, content_category, source
+        // Server must match these parameters for Meta's deduplication to work.
         $custom_data = [
+            'content_name' => sanitize_text_field($form_name), // Match browser format
+            'content_category' => 'lead', // Match browser format
+            'source' => 'elementor_form', // Match browser format
+            // Also include form_id and form_name for additional context (won't break deduplication).
             'form_id' => $form_id,
             'form_name' => $form_name,
         ];
@@ -172,10 +196,38 @@ class Meta_CAPI_Elementor {
             $custom_data[$field_title] = $field['value'];
         }
 
+        // CRITICAL: Check if current page is excluded BEFORE generating event ID or sending.
+        // If page is excluded, skip server-side tracking entirely.
+        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
+        $current_page_id = get_queried_object_id();
+        $is_page_excluded = false;
+        if (!empty($excluded_pages_str) && $current_page_id > 0) {
+            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
+            $is_page_excluded = in_array($current_page_id, $excluded_pages, true);
+            if ($is_page_excluded) {
+                $this->logger->info('Lead event skipped - page is in exclusion list', [
+                    'page_id' => $current_page_id,
+                    'form_id' => $form_id,
+                    'form_name' => $form_name,
+                ]);
+                return; // CRITICAL: Exit early - don't send server event for excluded pages.
+            }
+        }
+
+        // Generate event ID BEFORE creating event data - use consistent format for deduplication.
+        // Format: lead_[form_id]_[timestamp]_[random] - this must match exactly between browser and server.
+        // CRITICAL: Generate timestamp once and use it for both event_id and event_time to ensure exact match.
+        $timestamp = time();
+        $random = wp_generate_password(12, false);
+        $event_id = 'lead_' . sanitize_key($form_id) . '_' . $timestamp . '_' . $random;
+
         // Prepare event data.
+        // CRITICAL: Use timestamp from event_id for event_time to ensure exact match with browser.
+        // The browser extracts this same timestamp from the event ID, so they must match.
         $event_data = [
             'event_name' => 'Lead',
-            'event_time' => time(),
+            'event_time' => $timestamp, // Use timestamp from event ID (already in seconds)
+            'event_id' => $event_id, // Set event_id before filters
             'action_source' => 'website',
             'event_source_url' => $this->get_current_url(),
             'user_data' => $user_data,
@@ -189,6 +241,8 @@ class Meta_CAPI_Elementor {
             'has_phone' => isset($user_data['phone']),
             'has_name' => isset($user_data['first_name']) || isset($user_data['last_name']),
             'custom_data_fields' => array_keys($custom_data),
+            'event_id' => $event_id,
+            'event_time' => $timestamp,
         ]);
 
         // Allow filtering event data before sending.
@@ -196,28 +250,12 @@ class Meta_CAPI_Elementor {
 
         // Allow filtering by form ID.
         $event_data = apply_filters("meta_capi_form_submission_event_data_{$form_id}", $event_data, $record, $fields);
-
-        // Generate event ID BEFORE sending - use consistent format for deduplication.
-        // Format: lead_[form_id]_[timestamp]_[random] - this must match exactly between browser and server.
-        $timestamp = time();
-        $random = wp_generate_password(12, false);
-        $event_id = 'lead_' . sanitize_key($form_id) . '_' . $timestamp . '_' . $random;
-        $event_data['event_id'] = $event_id;
-
-        // Check if current page is excluded (for browser-side tracking prevention).
-        $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
-        $current_page_id = get_queried_object_id();
-        $is_page_excluded = false;
-        if (!empty($excluded_pages_str) && $current_page_id > 0) {
-            $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
-            $is_page_excluded = in_array($current_page_id, $excluded_pages, true);
-            if ($is_page_excluded) {
-                $this->logger->info('PageView and Lead events skipped - page is in exclusion list', [
-                    'page_id' => $current_page_id,
-                    'form_id' => $form_id,
-                ]);
-            }
-        }
+        
+        // CRITICAL: Extract timestamp from event_id to ensure exact match with browser Pixel timing.
+        // Event ID format: lead_{form_id}_{timestamp}_{random} where timestamp is in seconds.
+        // We use this timestamp for event_time to ensure perfect alignment with browser.
+        // The browser extracts this same timestamp from the event ID.
+        $event_data['event_time'] = $timestamp; // Use timestamp from event ID (already in seconds)
 
         // Send the event via Conversions API (server-side).
         // NOTE: This works independently of browser pixel injection.
@@ -358,6 +396,62 @@ class Meta_CAPI_Elementor {
         }
 
         return $user_data;
+    }
+
+    /**
+     * Get client IP address.
+     * 
+     * Security: Validates IP address and handles proxy headers.
+     *
+     * @return string Client IP address.
+     */
+    private function get_client_ip(): string {
+        $ip = '';
+        
+        // Check headers in order of preference (most reliable first).
+        $headers = [
+            'HTTP_CF_CONNECTING_IP',    // Cloudflare (most reliable).
+            'HTTP_X_REAL_IP',           // Nginx proxy.
+            'HTTP_X_FORWARDED_FOR',     // Standard proxy header (may contain multiple IPs).
+            'HTTP_CLIENT_IP',            // Some proxies set this.
+            'REMOTE_ADDR',               // Fallback (proxy IP, not client IP).
+        ];
+
+        foreach ($headers as $header) {
+            if (!empty($_SERVER[$header])) {
+                $ip = sanitize_text_field(wp_unslash($_SERVER[$header]));
+                
+                // If X-Forwarded-For, take the first IP.
+                if (strpos($ip, ',') !== false) {
+                    $ips = explode(',', $ip);
+                    $ip = trim($ips[0]);
+                }
+                
+                break;
+            }
+        }
+
+        // Validate IP address.
+        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+
+        return '';
+    }
+
+    /**
+     * Get user agent string.
+     * 
+     * Security: Sanitizes user agent.
+     *
+     * @return string User agent string.
+     */
+    private function get_user_agent(): string {
+        if (!empty($_SERVER['HTTP_USER_AGENT'])) {
+            return sanitize_text_field(wp_unslash($_SERVER['HTTP_USER_AGENT']));
+        }
+
+        return '';
     }
 
     /**

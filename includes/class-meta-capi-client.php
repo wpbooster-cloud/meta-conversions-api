@@ -128,10 +128,40 @@ class Meta_CAPI_Client {
             'has_fbc' => !empty($event['user_data']['fbc']),
             'has_ip' => !empty($event['user_data']['client_ip_address']),
             'ip_value' => !empty($event['user_data']['client_ip_address']) ? $event['user_data']['client_ip_address'] : 'missing',
+            'ip_value_full' => !empty($event['user_data']['client_ip_address']) ? $event['user_data']['client_ip_address'] : 'missing', // Full IP for comparison
             'has_user_agent' => !empty($event['user_data']['client_user_agent']),
             'user_agent_preview' => !empty($event['user_data']['client_user_agent']) ? substr($event['user_data']['client_user_agent'], 0, 50) . '...' : 'missing',
+            'user_agent_full' => !empty($event['user_data']['client_user_agent']) ? $event['user_data']['client_user_agent'] : 'missing', // Full user agent for comparison
             'has_em' => !empty($event['user_data']['em']),
             'has_ph' => !empty($event['user_data']['ph']),
+        ];
+        
+        // Log full payload for debugging (sanitize sensitive data).
+        $payload_for_log = $body;
+        if (isset($payload_for_log['data'][0]['user_data'])) {
+            // Mask hashed PII in logs (show structure, not values).
+            $user_data_keys = array_keys($payload_for_log['data'][0]['user_data']);
+            $payload_for_log['data'][0]['user_data'] = array_fill_keys($user_data_keys, '[REDACTED]');
+            // But keep IP and user agent visible (needed for dedup debugging).
+            // CRITICAL: Show FULL values (not truncated) for deduplication comparison.
+            if (!empty($event['user_data']['client_ip_address'])) {
+                $payload_for_log['data'][0]['user_data']['client_ip_address'] = $event['user_data']['client_ip_address'];
+            }
+            if (!empty($event['user_data']['client_user_agent'])) {
+                $payload_for_log['data'][0]['user_data']['client_user_agent'] = $event['user_data']['client_user_agent']; // Full user agent for comparison
+            }
+            if (!empty($event['user_data']['fbp'])) {
+                $payload_for_log['data'][0]['user_data']['fbp'] = substr($event['user_data']['fbp'], 0, 30) . '...';
+            }
+        }
+
+        // Log full IP and user agent for deduplication comparison (CRITICAL for debugging).
+        $dedup_comparison = [
+            'ip_address' => !empty($event['user_data']['client_ip_address']) ? $event['user_data']['client_ip_address'] : 'MISSING',
+            'user_agent_full' => !empty($event['user_data']['client_user_agent']) ? $event['user_data']['client_user_agent'] : 'MISSING',
+            'user_agent_length' => !empty($event['user_data']['client_user_agent']) ? strlen($event['user_data']['client_user_agent']) : 0,
+            'fbp' => !empty($event['user_data']['fbp']) ? $event['user_data']['fbp'] : 'MISSING',
+            'note' => 'Compare these EXACT values with browser event in Meta Test Events for deduplication',
         ];
         
         $this->logger->info('Sending event to Facebook Conversions API', [
@@ -140,8 +170,10 @@ class Meta_CAPI_Client {
             'event_time' => $event['event_time'] ?? 'none',
             'event_time_formatted' => isset($event['event_time']) ? date('Y-m-d H:i:s', $event['event_time']) : 'none',
             'user_data' => $user_data_summary,
+            'dedup_comparison' => $dedup_comparison, // Full values for comparison
             'url' => preg_replace('/access_token=[^&]+/', 'access_token=***', $url),
             'source' => 'CAPI',
+            'full_payload' => $payload_for_log, // Full payload structure for debugging
         ]);
 
         // Send the request.
@@ -168,12 +200,30 @@ class Meta_CAPI_Client {
         $decoded_response = json_decode($response_body, true);
 
         if ($response_code >= 200 && $response_code < 300) {
-            $this->logger->info('Event sent successfully', [
+            // Meta's API response may contain deduplication hints.
+            // Log full response for debugging.
+            $this->logger->info('Event sent successfully - Meta API Response', [
                 'event_name' => $event_data['event_name'] ?? 'unknown',
                 'event_id' => $event['event_id'] ?? 'none',
                 'event_time' => $event['event_time'] ?? 'none',
-                'response' => $decoded_response,
+                'response_code' => $response_code,
+                'response_body' => $decoded_response, // Full response from Meta
+                'events_received' => isset($decoded_response['events_received']) ? $decoded_response['events_received'] : 'not_provided',
+                'messages' => isset($decoded_response['messages']) ? $decoded_response['messages'] : 'not_provided',
+                'fbtrace_id' => isset($decoded_response['fbtrace_id']) ? $decoded_response['fbtrace_id'] : 'not_provided',
             ]);
+
+            // Check for deduplication warnings in response.
+            if (isset($decoded_response['messages']) && is_array($decoded_response['messages'])) {
+                foreach ($decoded_response['messages'] as $message) {
+                    if (isset($message['message']) && (stripos($message['message'], 'duplicate') !== false || stripos($message['message'], 'dedup') !== false)) {
+                        $this->logger->warning('Meta API deduplication message detected', [
+                            'event_id' => $event['event_id'] ?? 'none',
+                            'message' => $message,
+            ]);
+                    }
+                }
+            }
 
             return [
                 'success' => true,
@@ -183,9 +233,12 @@ class Meta_CAPI_Client {
         } else {
             $error_message = $decoded_response['error']['message'] ?? __('Unknown error', 'meta-conversions-api');
             
-            $this->logger->error('Failed to send event', [
+            $this->logger->error('Failed to send event - Meta API Error Response', [
                 'response_code' => $response_code,
-                'error' => $decoded_response,
+                'response_body' => $response_body, // Raw response body
+                'decoded_response' => $decoded_response,
+                'event_id' => $event['event_id'] ?? 'none',
+                'event_name' => $event_data['event_name'] ?? 'unknown',
             ]);
 
             // Track failure for admin notification
@@ -274,7 +327,7 @@ class Meta_CAPI_Client {
                 'user_data_keys' => array_keys($user_data),
             ]);
         }
-
+        
         // Get Facebook browser ID (fbp cookie).
         // CRITICAL: Use provided fbp from user_data (captured from original request).
         // Don't fallback to $_COOKIE in cron context (cookies won't be available).
@@ -328,6 +381,17 @@ class Meta_CAPI_Client {
             $prepared['country'] = $this->hash_pii(strtolower(trim($user_data['country'])));
         }
 
+        // Add external_id for better matching (optional but recommended by Meta).
+        // external_id should be a hashed email or phone number for user identification.
+        // Meta uses this for advanced matching and deduplication.
+        if (!empty($user_data['email'])) {
+            // Use hashed email as external_id (same hash as em field for consistency).
+            $prepared['external_id'] = $this->hash_pii(strtolower(trim($user_data['email'])));
+        } elseif (!empty($user_data['phone'])) {
+            // Fallback to hashed phone if email not available.
+            $prepared['external_id'] = $this->hash_pii($this->normalize_phone($user_data['phone']));
+        }
+
         return $prepared;
     }
 
@@ -364,14 +428,14 @@ class Meta_CAPI_Client {
         $ip = '';
 
         // Check headers in order of trust (most trusted first).
+        // CRITICAL: Priority order must match browser-side detection for deduplication.
+        // For Cloudflare sites, browser events use CF-Connecting-IP, so server must check it first.
         // Security: HTTP_X_FORWARDED_FOR can be spoofed by clients, so check it last.
-        // Priority order: HTTP_CLIENT_IP before HTTP_X_REAL_IP for universal compatibility.
-        // HTTP_X_REAL_IP is Nginx-specific, while HTTP_CLIENT_IP is more universally supported.
         $headers = [
-            'HTTP_CF_CONNECTING_IP', // Cloudflare (most trusted when using CF).
-            'HTTP_CLIENT_IP',        // Universal proxy header (check before Nginx-specific).
-            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (Nginx-specific, check after HTTP_CLIENT_IP).
-            'HTTP_X_FORWARDED_FOR',  // Last: can be spoofed by clients (check last for security).
+            'HTTP_CF_CONNECTING_IP', // Cloudflare (MUST be first for CF sites - browser uses this).
+            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (check second).
+            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check third.
+            'HTTP_CLIENT_IP',        // Some proxies set this (check after X-Forwarded-For).
         ];
 
         foreach ($headers as $header) {
@@ -380,10 +444,10 @@ class Meta_CAPI_Client {
                 
                 // Handle comma-separated IPs (X-Forwarded-For can have multiple IPs: "client, proxy1, proxy2").
                 // We want the FIRST (original client) IP.
-                if (strpos($ip, ',') !== false) {
-                    $ips = explode(',', $ip);
-                    $ip = trim($ips[0]);
-                }
+            if (strpos($ip, ',') !== false) {
+                $ips = explode(',', $ip);
+                $ip = trim($ips[0]);
+            }
                 
                 // Remove port number if present (e.g., "192.168.1.1:8080" -> "192.168.1.1").
                 // Apply this BEFORE validation to ensure consistent handling.
@@ -417,7 +481,7 @@ class Meta_CAPI_Client {
         if (!empty($fallback_ip) && filter_var($fallback_ip, FILTER_VALIDATE_IP)) {
             return $fallback_ip;
         }
-        
+
         return '';
     }
 

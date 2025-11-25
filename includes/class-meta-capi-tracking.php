@@ -95,9 +95,14 @@ class Meta_CAPI_Tracking {
             }
         }
     }
-
+    
     /**
      * Generate PageView event ID early (before wp_head for Pixel injection).
+     * 
+     * ✅ WORKING IMPLEMENTATION - DO NOT BREAK
+     * This is the reference implementation for event ID coordination.
+     * Both browser and server events are sending and deduplicating successfully.
+     * See: PAGEVIEW-WORKING-SETUP.md for full documentation.
      * 
      * This follows Meta's recommended approach for deduplication:
      * 1. Generate event ID ONCE early (template_redirect hook)
@@ -113,17 +118,17 @@ class Meta_CAPI_Tracking {
      * This ensures both Pixel and CAPI use the same event ID.
      */
     public function generate_pageview_event_id(): void {
-        // Log that this hook fired (for debugging).
-        $this->logger->log('generate_pageview_event_id() hook fired', 'debug', [
-            'is_admin' => is_admin(),
-            'wp_doing_ajax' => wp_doing_ajax(),
-            'wp_doing_cron' => wp_doing_cron(),
-            'request_uri' => isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '',
-        ]);
-
         // Don't track admin pages or AJAX requests.
         if (is_admin() || wp_doing_ajax() || wp_doing_cron()) {
-            $this->logger->log('generate_pageview_event_id() returning early - admin/ajax/cron', 'debug');
+            return;
+        }
+        
+        // CRITICAL: Also check if we're on the plugin settings page (is_admin() may not catch this on 'template_redirect' hook).
+        $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        if (!empty($request_uri) && (
+            strpos($request_uri, 'options-general.php?page=meta-conversions-api') !== false ||
+            strpos($request_uri, 'admin.php?page=meta-conversions-api') !== false
+        )) {
             return;
         }
 
@@ -134,12 +139,10 @@ class Meta_CAPI_Tracking {
         // For now, we generate the ID anyway to ensure Pixel has it (Pixel's own admin check will prevent injection).
 
         // Skip tracking favicon, robots.txt, and other non-page requests.
-        $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
         if (preg_match('/\/(favicon\.ico|robots\.txt|sitemap.*\.xml|wp-admin|wp-includes|wp-json|crossdomain\.xml|apple-touch-icon.*\.png)/i', $request_uri)) {
-            $this->logger->log('generate_pageview_event_id() returning early - non-page request', 'debug', ['request_uri' => $request_uri]);
             return;
         }
-
+        
         // CRITICAL: Generate event ID even if we might skip tracking later.
         // Pixel needs the event ID even if CAPI will skip sending (for deduplication).
         // The actual sending decision happens in track_page_view().
@@ -150,7 +153,7 @@ class Meta_CAPI_Tracking {
             $page_id = get_queried_object_id();
             $identifier = $page_id > 0 ? (string) $page_id : md5($this->get_current_url());
             $event_id = $this->coordinator->generate_event_id('pageview', $identifier, true);
-
+        
             // Store event ID as static property for Pixel to use (single source of truth).
             self::$current_pageview_event_id = $event_id;
 
@@ -165,11 +168,6 @@ class Meta_CAPI_Tracking {
                 'hook' => $hook_name,
                 'note' => 'Event ID generated for both Pixel and CAPI deduplication',
             ]);
-        } else {
-            // Event ID already exists (from a previous call or instance).
-            $this->logger->log('PageView event ID already exists, skipping regeneration', 'debug', [
-                'event_id' => self::$current_pageview_event_id,
-            ]);
         }
         // Note: If event ID already exists, we silently skip regeneration (expected behavior).
         
@@ -180,14 +178,12 @@ class Meta_CAPI_Tracking {
             $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
             $current_page_id = get_queried_object_id();
             if (in_array($current_page_id, $excluded_pages, true)) {
-                $this->logger->log('generate_pageview_event_id() - page excluded, but event ID generated for Pixel', 'debug', ['page_id' => $current_page_id]);
                 return;
             }
         }
         
         // Allow filtering to skip tracking on specific pages.
         if (apply_filters('meta_capi_skip_page_view', false)) {
-            $this->logger->log('generate_pageview_event_id() - skipped via filter, but event ID generated for Pixel', 'debug');
             return;
         }
         
@@ -199,18 +195,6 @@ class Meta_CAPI_Tracking {
      * Track page view event.
      */
     public function track_page_view(): void {
-        // Log entry into this method (for debugging what triggers it).
-        $this->logger->log('track_page_view() hook fired', 'debug', [
-            'is_admin' => is_admin(),
-            'wp_doing_ajax' => wp_doing_ajax(),
-            'wp_doing_cron' => wp_doing_cron(),
-            'is_user_logged_in' => is_user_logged_in(),
-            'current_user_can_manage_options' => current_user_can('manage_options'),
-            'request_uri' => isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '',
-            'http_referer' => isset($_SERVER['HTTP_REFERER']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_REFERER'])) : 'direct',
-            'user_agent' => isset($_SERVER['HTTP_USER_AGENT']) ? substr(sanitize_text_field(wp_unslash($_SERVER['HTTP_USER_AGENT'])), 0, 50) : '',
-        ]);
-
         // CRITICAL: Check admin user FIRST, before setting static flag or any other checks.
         // This prevents admin users from being tracked when viewing the frontend.
         // Note: is_admin() only returns true for admin dashboard pages, not when admin views frontend.
@@ -220,25 +204,10 @@ class Meta_CAPI_Tracking {
         $is_admin_user = $user_is_logged_in && current_user_can('manage_options');
         $skip_admin_tracking = apply_filters('meta_capi_skip_admin_tracking', true);
         
-        // Log admin check details for debugging.
-        if ($user_is_logged_in) {
-            $this->logger->log('User is logged in, checking admin status', 'debug', [
-                'user_id' => get_current_user_id(),
-                'is_admin_user' => $is_admin_user,
-                'skip_admin_tracking_filter' => $skip_admin_tracking,
-            ]);
-        }
-        
         if ($is_admin_user && $skip_admin_tracking) {
-            $this->logger->log('track_page_view() returning early - admin user (skip admin tracking enabled)', 'info', [
-                'user_id' => get_current_user_id(),
-                'is_admin_user' => $is_admin_user,
-                'skip_admin_tracking_filter' => $skip_admin_tracking,
-                'note' => 'Admin users are excluded from CAPI tracking by default',
-            ]);
             return;
         }
-        
+
         // Log if admin user but skip is disabled (for debugging).
         if ($is_admin_user && !$skip_admin_tracking) {
             $this->logger->log('Admin user detected but skip_admin_tracking filter returned false - tracking will proceed', 'warning', [
@@ -261,41 +230,102 @@ class Meta_CAPI_Tracking {
         
         // Set flag IMMEDIATELY to prevent race conditions if this method is called multiple times.
         self::$pageview_tracked_global = true;
-        
-        // Log that we're starting to track (for debugging duplicate tracking).
-        $this->logger->log('Starting PageView tracking (server-side)', 'debug', [
-            'hook' => current_filter(),
-            'event_id' => self::$current_pageview_event_id,
-            'static_flag_set' => true,
-        ]);
 
         // Don't track admin pages or AJAX requests.
-        if (is_admin() || wp_doing_ajax() || wp_doing_cron()) {
-            $this->logger->log('track_page_view() returning early - admin/ajax/cron', 'debug', [
-                'is_admin' => is_admin(),
-                'wp_doing_ajax' => wp_doing_ajax(),
-                'wp_doing_cron' => wp_doing_cron(),
+        // CRITICAL: Also check REQUEST_URI for AJAX endpoints (wp_doing_ajax() may not catch all cases).
+        $request_uri_check = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        $is_ajax_endpoint = wp_doing_ajax() || 
+                           (strpos($request_uri_check, 'wc-ajax=') !== false) ||
+                           (strpos($request_uri_check, 'admin-ajax.php') !== false);
+        
+        if (is_admin() || $is_ajax_endpoint || wp_doing_cron()) {
+            if ($is_ajax_endpoint) {
+                $this->logger->log('PageView skipped - AJAX request detected', 'info', [
+                    'request_uri' => $request_uri_check,
+                    'wp_doing_ajax' => wp_doing_ajax(),
+                ]);
+            } elseif (is_admin()) {
+                $this->logger->log('PageView skipped - admin page detected', 'info', [
+                    'request_uri' => $request_uri_check,
+                    'is_admin' => true,
+                ]);
+            }
+            return;
+        }
+        
+        // CRITICAL: Also check for plugin activation redirects (WordPress redirects after plugin activation).
+        // These might trigger a frontend pageview before the admin redirect completes.
+        if (isset($_GET['activate']) || isset($_GET['activate-multi']) || 
+            (isset($_SERVER['HTTP_REFERER']) && strpos($_SERVER['HTTP_REFERER'], 'plugins.php') !== false && 
+             isset($_GET['plugin']) && strpos($_GET['plugin'], 'meta-conversions-api') !== false)) {
+            $this->logger->log('PageView skipped - plugin activation detected', 'info', [
+                'request_uri' => $request_uri_check,
+                'activate_param' => isset($_GET['activate']) ? 'yes' : 'no',
+                'referer' => isset($_SERVER['HTTP_REFERER']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_REFERER'])) : 'none',
             ]);
             return;
         }
-
-        // Skip tracking favicon, robots.txt, and other non-page requests.
+        
+        // CRITICAL: Also check if we're on the plugin settings page (is_admin() may not catch this on 'wp' hook).
+        // Check both REQUEST_URI and current screen to be thorough.
         $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+        $is_plugin_settings_page = false;
+        
+        // Check if we're on the plugin settings page via REQUEST_URI.
+        if (!empty($request_uri) && (
+            strpos($request_uri, 'options-general.php?page=meta-conversions-api') !== false ||
+            strpos($request_uri, 'admin.php?page=meta-conversions-api') !== false
+        )) {
+            $is_plugin_settings_page = true;
+        }
+        
+        // Also check current screen if available (more reliable).
+        if (function_exists('get_current_screen')) {
+            $screen = get_current_screen();
+            if ($screen && (
+                $screen->id === 'settings_page_meta-conversions-api' ||
+                (isset($_GET['page']) && $_GET['page'] === 'meta-conversions-api')
+            )) {
+                $is_plugin_settings_page = true;
+            }
+        }
+        
+        if ($is_plugin_settings_page) {
+            $this->logger->log('PageView skipped - plugin settings page', 'info', [
+                'request_uri' => $request_uri,
+                'note' => 'Plugin settings pages should not trigger tracking',
+            ]);
+            return;
+        }
+        
+        // Skip tracking favicon, robots.txt, and other non-page requests.
         if (preg_match('/\/(favicon\.ico|robots\.txt|sitemap.*\.xml|wp-admin|wp-includes|wp-json|crossdomain\.xml|apple-touch-icon.*\.png)/i', $request_uri)) {
             return;
         }
-
+        
+        // CRITICAL: Filter out bots, crawlers, and automated requests.
+        // These can trigger multiple PageView events without actual user interaction.
+        // Common culprits: monitoring services, cache warming, health checks, crawlers.
+        $user_agent = $this->get_user_agent();
+        if ($this->is_bot_request($user_agent, $request_uri_check)) {
+            $this->logger->log('PageView skipped - bot/crawler detected', 'info', [
+                'user_agent' => $user_agent,
+                'request_uri' => $request_uri_check,
+            ]);
+            return;
+        }
+        
         // Check if this page is excluded.
         $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
         if (!empty($excluded_pages_str)) {
             $excluded_pages = array_filter(array_map('absint', explode(',', $excluded_pages_str)));
             $current_page_id = get_queried_object_id();
             if (in_array($current_page_id, $excluded_pages, true)) {
-                $this->logger->info('PageView skipped - page is in exclusion list', ['page_id' => $current_page_id]);
+                $this->logger->log('PageView skipped - page is in exclusion list', 'info', ['page_id' => $current_page_id]);
                 return;
             }
         }
-        
+
         // Allow filtering to skip tracking on specific pages.
         if (apply_filters('meta_capi_skip_page_view', false)) {
             return;
@@ -309,16 +339,38 @@ class Meta_CAPI_Tracking {
         // This can happen if template_redirect hook didn't fire (e.g., cached pages, redirects, early exits).
         if (empty($event_id)) {
             $page_id = get_queried_object_id();
-            $identifier = $page_id > 0 ? (string) $page_id : md5($this->get_current_url());
+            $current_url = $this->get_current_url();
+            $identifier = $page_id > 0 ? (string) $page_id : md5($current_url);
             $event_id = $this->coordinator->generate_event_id('pageview', $identifier, true);
             self::$current_pageview_event_id = $event_id;
+            
+            // Track fallback frequency for cache analysis.
+            $fallback_count = get_transient('meta_capi_pageview_fallback_count');
+            $fallback_count = $fallback_count ? (int) $fallback_count + 1 : 1;
+            set_transient('meta_capi_pageview_fallback_count', $fallback_count, DAY_IN_SECONDS);
+            
+            // Detect likely cache-related issues.
+            $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+            $is_likely_cached = (
+                !did_action('template_redirect') ||
+                (defined('WP_CACHE') && WP_CACHE) ||
+                (function_exists('wp_cache_get') && wp_cache_get('pageview_fallback_' . md5($request_uri)))
+            );
+            
             $this->logger->log('PageView event ID generated in fallback (generate_pageview_event_id did not run)', 'warning', [
                 'event_id' => $event_id,
                 'page_id' => $page_id,
                 'identifier' => $identifier,
+                'url' => $current_url,
+                'request_uri' => $request_uri,
+                'request_method' => isset($_SERVER['REQUEST_METHOD']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])) : 'unknown',
+                'template_redirect_fired' => did_action('template_redirect'),
+                'wp_cache_defined' => defined('WP_CACHE') ? WP_CACHE : false,
+                'is_likely_cached' => $is_likely_cached,
+                'fallback_count_today' => $fallback_count,
                 'note' => 'template_redirect hook may not have fired (cached page, redirect, or early exit)',
+                'recommendation' => $fallback_count > 10 ? 'Consider excluding this page from cache (Breeze/Varnish)' : 'Monitor frequency - if high, consider cache exclusions',
                 'hook' => 'fallback_in_track_page_view',
-                'warning' => 'This should not happen - event ID should be generated on template_redirect',
             ]);
         }
 
@@ -337,15 +389,24 @@ class Meta_CAPI_Tracking {
             ]);
         }
 
+        // CRITICAL: Get current URL and normalize to match browser's window.location.href exactly.
+        // Browser Pixel uses window.location.href which includes trailing slashes for homepage.
+        // We need to match this exactly for deduplication.
+        $event_source_url = $this->get_current_url_normalized();
+        
         // Prepare event data.
+        // CRITICAL: PageView events should have minimal or no custom_data to match browser Pixel.
+        // Browser Pixel sends PageView with empty custom_data {}, so server should match this.
+        // This ensures better deduplication consistency.
         $event_data = [
             'event_name' => 'PageView',
             'event_time' => $event_time, // Use current time to match browser Pixel timing
             'event_id' => $event_id, // Add event ID for deduplication
             'action_source' => 'website',
-            'event_source_url' => $this->get_current_url(),
+            'event_source_url' => $event_source_url, // Normalized URL to match browser
             'user_data' => $this->get_user_data(),
-            'custom_data' => $this->get_page_custom_data(),
+            // Note: Removed custom_data to match browser Pixel (which sends empty {})
+            // PageView is a simple event and doesn't need custom data for deduplication.
         ];
 
         // Get user_data for logging (before it's hashed/processed).
@@ -358,7 +419,9 @@ class Meta_CAPI_Tracking {
             'event_time_formatted' => date('Y-m-d H:i:s', $event_time),
             'event_time_unix' => $event_time,
             'source' => 'CAPI',
-            'url' => $this->get_current_url(),
+            'url' => $event_source_url,
+            'url_normalized' => true,
+            'note' => 'URL normalized to match browser window.location.href (includes trailing slash)',
             'user_data_preview' => [
                 'has_client_ip' => !empty($raw_user_data['client_ip_address']),
                 'client_ip' => !empty($raw_user_data['client_ip_address']) ? $raw_user_data['client_ip_address'] : 'missing',
@@ -384,8 +447,67 @@ class Meta_CAPI_Tracking {
      *
      * @return string Event ID or empty string if not set.
      */
+    /**
+     * Get PageView event ID for Pixel injection.
+     * 
+     * CRITICAL: If event ID doesn't exist (e.g., template_redirect didn't fire on cached pages),
+     * generate a fallback event ID here to ensure browser and server use the SAME ID.
+     * This matches the fallback logic in track_page_view().
+     * 
+     * @return string Event ID (never empty - generates fallback if needed).
+     */
     public static function get_pageview_event_id(): string {
-        return self::$current_pageview_event_id;
+        // If event ID already exists, return it (normal case).
+        if (!empty(self::$current_pageview_event_id)) {
+            return self::$current_pageview_event_id;
+        }
+        
+        // Fallback: Generate event ID if template_redirect didn't fire (e.g., cached pages).
+        // This ensures browser and server use the SAME fallback event ID.
+        // We use the same logic as track_page_view() fallback for consistency.
+        $page_id = get_queried_object_id();
+        $current_url = self::get_current_url_static();
+        $identifier = $page_id > 0 ? (string) $page_id : md5($current_url);
+        
+        // Create a coordinator instance to generate the event ID.
+        // We can't use $this->coordinator in a static method, so create a temporary instance.
+        $coordinator = new Meta_CAPI_Coordinator();
+        $event_id = $coordinator->generate_event_id('pageview', $identifier, true);
+        
+        // Store it so track_page_view() will use the same ID (prevents double generation).
+        self::$current_pageview_event_id = $event_id;
+        
+        // Log fallback usage (only if logger is available - this is a static method).
+        // Note: This is called from wp_head, so logging here helps track Pixel-side fallback usage.
+        if (class_exists('Meta_CAPI_Logger')) {
+            $logger = meta_capi()->logger;
+            $request_uri = isset($_SERVER['REQUEST_URI']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])) : '';
+            $logger->log('PageView event ID generated in fallback (Pixel injection)', 'info', [
+                'event_id' => $event_id,
+                'page_id' => $page_id,
+                'identifier' => $identifier,
+                'url' => $current_url,
+                'request_uri' => $request_uri,
+                'template_redirect_fired' => did_action('template_redirect'),
+                'context' => 'Pixel injection fallback (wp_head hook)',
+                'note' => 'This fallback ensures Pixel has an event ID even if template_redirect did not fire',
+            ]);
+        }
+        
+        return $event_id;
+    }
+    
+    /**
+     * Get current URL (static version for use in static methods).
+     * 
+     * @return string Current URL.
+     */
+    private static function get_current_url_static(): string {
+        if (isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+            return $protocol . sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])) . sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI']));
+        }
+        return home_url();
     }
 
     /**
@@ -473,13 +595,13 @@ class Meta_CAPI_Tracking {
         $ip = '';
 
         // Check headers in order of trust (most trusted first).
-        // Priority order: HTTP_CLIENT_IP before HTTP_X_REAL_IP for universal compatibility.
-        // HTTP_X_REAL_IP is Nginx-specific, while HTTP_CLIENT_IP is more universally supported.
+        // CRITICAL: Priority order must match browser-side detection for deduplication.
+        // For Cloudflare sites, browser events use CF-Connecting-IP, so server must check it first.
         $headers = [
-            'HTTP_CF_CONNECTING_IP', // Cloudflare (most trusted when using CF).
-            'HTTP_CLIENT_IP',        // Universal proxy header (check before Nginx-specific).
-            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (Nginx-specific, check after HTTP_CLIENT_IP).
-            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check last.
+            'HTTP_CF_CONNECTING_IP', // Cloudflare (MUST be first for CF sites - browser uses this).
+            'HTTP_X_REAL_IP',        // Nginx/proxy real IP (check second).
+            'HTTP_X_FORWARDED_FOR',  // Can be spoofed, check third.
+            'HTTP_CLIENT_IP',        // Some proxies set this (check after X-Forwarded-For).
         ];
 
         foreach ($headers as $header) {
@@ -523,6 +645,64 @@ class Meta_CAPI_Tracking {
      */
     private function get_user_agent(): string {
         return !empty($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_USER_AGENT'])) : '';
+    }
+
+    /**
+     * Check if request is from a bot, crawler, or automated service.
+     * Prevents automated requests from triggering PageView events.
+     *
+     * @param string $user_agent User agent string.
+     * @param string $request_uri Request URI.
+     * @return bool True if bot/crawler, false otherwise.
+     */
+    private function is_bot_request(string $user_agent, string $request_uri): bool {
+        // Empty user agent is suspicious (could be bot).
+        if (empty($user_agent)) {
+            return true;
+        }
+
+        // Common bot/crawler patterns.
+        $bot_patterns = [
+            // Search engine crawlers.
+            'googlebot', 'bingbot', 'slurp', 'duckduckbot', 'baiduspider', 'yandexbot', 'sogou',
+            // Social media crawlers.
+            'facebookexternalhit', 'twitterbot', 'linkedinbot', 'whatsapp', 'telegrambot',
+            // Monitoring/health check services.
+            'uptimerobot', 'pingdom', 'monitor', 'healthcheck', 'statuscheck',
+            // WordPress/plugin detection tools.
+            'pixeldetector', 'wpreview', 'wpbot',
+            // Cache warming/preview tools.
+            'cache', 'preview', 'warmup',
+            // Other common bots.
+            'bot', 'crawler', 'spider', 'scraper', 'curl', 'wget', 'python-requests', 'http',
+            // WordPress specific bots.
+            'wordpress', 'wp-', 'wp_',
+        ];
+
+        $user_agent_lower = strtolower($user_agent);
+        
+        foreach ($bot_patterns as $pattern) {
+            if (strpos($user_agent_lower, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        // Check for common bot indicators in request URI.
+        $bot_uri_patterns = [
+            '/wp-cron',
+            '/cron',
+            '/health',
+            '/ping',
+            '/status',
+        ];
+        
+        foreach ($bot_uri_patterns as $pattern) {
+            if (strpos($request_uri, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -576,16 +756,116 @@ class Meta_CAPI_Tracking {
     }
 
     /**
-     * Send event asynchronously using WordPress cron.
+     * Get current URL normalized to match browser's window.location.href.
+     * 
+     * CRITICAL: Browser Pixel uses window.location.href which includes trailing slashes
+     * for homepage and may include query parameters. We need to match this exactly.
+     *
+     * @return string Normalized current URL.
+     */
+    private function get_current_url_normalized(): string {
+        // Use REQUEST_URI to match browser's window.location.href exactly.
+        // This includes trailing slashes, query parameters, and path exactly as browser sees it.
+        if (isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+            $url = $protocol . sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])) . sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI']));
+            
+            // Normalize: Ensure homepage has trailing slash (matches browser behavior).
+            $parsed = wp_parse_url($url);
+            if (isset($parsed['path']) && $parsed['path'] === '/') {
+                // Already has trailing slash, good.
+            } elseif (!isset($parsed['path']) || $parsed['path'] === '') {
+                // No path, add trailing slash for homepage.
+                $url = rtrim($url, '/') . '/';
+            }
+            
+            return $url;
+        }
+        
+        // Fallback to WordPress method if REQUEST_URI not available.
+        global $wp;
+        $url = home_url(add_query_arg([], $wp->request));
+        
+        // Ensure trailing slash for homepage.
+        if (empty($wp->request) || $wp->request === '/') {
+            $url = trailingslashit($url);
+        }
+        
+        return $url;
+    }
+
+    /**
+     * Send event asynchronously using WordPress wp_footer hook.
+     * This ensures events are sent without blocking page load, but earlier than shutdown.
      *
      * @param array $event_data Event data.
      */
     private function send_event_async(array $event_data): void {
         if (!empty($event_data) && is_array($event_data)) {
-            wp_schedule_single_event(time(), 'meta_capi_send_event', [$event_data]);
-            // Don't call spawn_cron() - WordPress cron will process scheduled events automatically
-            // Calling spawn_cron() can cause blocking/timeout issues on some servers
-            // Events will be processed on the next cron run (usually within 1 minute)
+            // Prevent duplicate hook registrations using event_id + event_time as key.
+            $event_id = $event_data['event_id'] ?? '';
+            $event_time = $event_data['event_time'] ?? 0;
+            $dedupe_key = $event_id . '_' . $event_time;
+            
+            // Check if we've already queued this exact event for sending.
+            if (isset($GLOBALS['meta_capi_queued_events'][$dedupe_key])) {
+                $this->logger->log('Event already queued for wp_footer, skipping duplicate registration', 'warning', [
+                    'event_id' => $event_id,
+                    'event_time' => $event_time,
+                    'dedupe_key' => $dedupe_key,
+                ]);
+                return;
+            }
+            
+            // Mark this event as queued to prevent duplicate hook registrations.
+            $GLOBALS['meta_capi_queued_events'] = $GLOBALS['meta_capi_queued_events'] ?? [];
+            $GLOBALS['meta_capi_queued_events'][$dedupe_key] = true;
+            
+            // Use wp_footer hook to send event after page content but before shutdown (faster than shutdown).
+            // This is more reliable than wp_schedule_single_event() which depends on cron.
+            add_action('wp_footer', function() use ($event_data) {
+                // Create fresh instances to avoid any state issues.
+                $logger = new Meta_CAPI_Logger();
+                $client = new Meta_CAPI_Client($logger);
+                
+                // Prevent duplicate sends using event_id + event_time.
+                $event_id = $event_data['event_id'] ?? '';
+                $event_time = $event_data['event_time'] ?? 0;
+                $dedupe_key = $event_id . '_' . $event_time;
+                
+                if (isset($GLOBALS['meta_capi_sent_events'][$dedupe_key])) {
+                    $logger->log('Duplicate event prevented in wp_footer handler', 'warning', [
+                        'dedupe_key' => $dedupe_key,
+                        'event_id' => $event_id,
+                    ]);
+                    return;
+                }
+                $GLOBALS['meta_capi_sent_events'][$dedupe_key] = true;
+                
+                $logger->log('Processing event via wp_footer hook - sending to CAPI', 'info', [
+                    'event_name' => $event_data['event_name'] ?? 'unknown',
+                    'event_id' => $event_id,
+                    'event_time' => $event_time,
+                ]);
+                
+                $result = $client->send_event($event_data);
+                
+                $logger->log('Event processing completed via wp_footer hook', 'info', [
+                    'event_id' => $event_id,
+                    'success' => $result['success'] ?? false,
+                    'message' => $result['message'] ?? 'unknown',
+                ]);
+            }, 999); // High priority to run late in footer but before shutdown.
+            
+            $this->logger->log('PageView event queued for wp_footer hook processing', 'info', [
+                'event_id' => $event_data['event_id'] ?? 'missing',
+                'note' => 'Event will be sent in footer (faster than shutdown)',
+            ]);
+        } else {
+            $this->logger->log('send_event_async() called with empty or invalid event data', 'warning', [
+                'event_data_empty' => empty($event_data),
+                'event_data_is_array' => is_array($event_data),
+            ]);
         }
     }
 
@@ -617,19 +897,73 @@ class Meta_CAPI_Tracking {
 }
 
 // Register async event sending action.
+// Static cache to prevent duplicate event sends in the same request.
+// Key format: event_id_event_time
+$GLOBALS['meta_capi_sent_events'] = $GLOBALS['meta_capi_sent_events'] ?? [];
+
 add_action('meta_capi_send_event', function($event_data) {
+    $logger = new Meta_CAPI_Logger();
+    
     try {
-        if (empty($event_data) || !is_array($event_data)) {
-            error_log('Meta CAPI: Invalid event data in async handler');
+        // CRITICAL: Validate event_data is an array BEFORE accessing any keys.
+        // In PHP 8+, accessing array keys on non-array values can raise TypeErrors.
+        if (!is_array($event_data) || empty($event_data)) {
+            $logger->log('Invalid event data in async handler', 'error', [
+                'event_data_type' => gettype($event_data),
+                'event_data_empty' => empty($event_data),
+                'event_data_is_array' => is_array($event_data),
+            ]);
             return;
         }
-        $logger = new Meta_CAPI_Logger();
+        
+        // CRITICAL: Prevent duplicate sends.
+        // wp_schedule_single_event() + spawn_cron() can cause the same event to be processed twice:
+        // 1. Immediately via spawn_cron()
+        // 2. Again when the scheduled event fires
+        // Use event_id + event_time as unique identifier.
+        // Safe to access now - we've validated $event_data is an array above.
+        $event_id = $event_data['event_id'] ?? '';
+        $event_time = $event_data['event_time'] ?? 0;
+        $dedupe_key = $event_id . '_' . $event_time;
+        
+        if (isset($GLOBALS['meta_capi_sent_events'][$dedupe_key])) {
+            $logger->log('Duplicate event prevented in async handler', 'warning', [
+                'dedupe_key' => $dedupe_key,
+                'event_id' => $event_id,
+                'event_time' => $event_time,
+            ]);
+            return;
+        }
+        $GLOBALS['meta_capi_sent_events'][$dedupe_key] = true;
+        
+        $logger->log('Processing async event - sending to CAPI', 'info', [
+            'event_name' => $event_data['event_name'] ?? 'unknown',
+            'event_id' => $event_id,
+            'event_time' => $event_time,
+        ]);
+        
         $client = new Meta_CAPI_Client($logger);
-        $client->send_event($event_data);
+        $result = $client->send_event($event_data);
+        
+        $logger->log('Async event processing completed', 'info', [
+            'event_id' => $event_id,
+            'success' => $result['success'] ?? false,
+            'message' => $result['message'] ?? 'unknown',
+        ]);
     } catch (Exception $e) {
-        error_log('Meta CAPI: Error in async event handler: ' . $e->getMessage());
+        $logger->log('Exception in async event handler', 'error', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString(),
+        ]);
     } catch (Error $e) {
-        error_log('Meta CAPI: Fatal error in async event handler: ' . $e->getMessage());
+        $logger->log('Fatal error in async event handler', 'error', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString(),
+        ]);
     }
 });
 
