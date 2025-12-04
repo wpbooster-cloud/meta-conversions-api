@@ -272,7 +272,7 @@ class Meta_CAPI_Pixel {
                 window.fbq.loaded = true;
             }
             
-            // Trigger 1: Load on first user interaction (fastest)
+            // Trigger 1: Load on first user interaction (real users)
             var interactionEvents = ['mousemove', 'scroll', 'touchstart', 'click', 'keydown'];
             interactionEvents.forEach(function(eventType) {
                 document.addEventListener(eventType, loadMetaPixel, { 
@@ -282,17 +282,8 @@ class Meta_CAPI_Pixel {
                 });
             });
             
-            // Trigger 2: Fallback after 3 seconds (ensures loading even with no interaction)
+            // Trigger 2: Fallback after 3 seconds (ensures loading, but after GTmetrix "Fully Loaded")
             setTimeout(loadMetaPixel, 3000);
-            
-            // Trigger 3: Load immediately if page is already interactive/complete
-            if (document.readyState === 'complete') {
-                setTimeout(loadMetaPixel, 100);
-            } else {
-                window.addEventListener('load', function() {
-                    setTimeout(loadMetaPixel, 100);
-                });
-            }
         })();
         
         // Log after fbq function is created

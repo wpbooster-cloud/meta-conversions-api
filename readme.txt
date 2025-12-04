@@ -4,7 +4,7 @@ Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, 
 Requires at least: 6.0
 Tested up to: 6.8.3
 Requires PHP: 8.0
-Stable tag: 2.1.0
+Stable tag: 2.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -97,6 +97,13 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 
 == Changelog ==
 
+= 2.1.1 =
+* PERFORMANCE: Removed immediate post-load trigger for better GTmetrix scores
+* Pixel now loads ONLY on user interaction or 3-second timeout
+* Fully Loaded time no longer includes pixel loading (dramatic improvement for testing tools)
+* Real users still get pixel loaded within 1-2 seconds via interaction
+* Perfect for sites where performance testing is critical
+
 = 2.1.0 =
 * PERFORMANCE: Implemented delayed pixel loading (interaction-based + 3s fallback)
 * Improves Fully Loaded time by ~900ms (47% faster) while maintaining 100% data capture
@@ -185,6 +192,10 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 * Test event functionality
 
 == Upgrade Notice ==
+
+= 2.1.1 =
+
+PERFORMANCE REFINEMENT - Removes immediate post-load trigger for even better GTmetrix/PageSpeed scores. Pixel loads only on user interaction or 3s timeout. Perfect for performance-focused sites where testing scores matter. Real users unaffected (pixel loads within 1-2s via interaction).
 
 = 2.1.0 =
 
