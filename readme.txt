@@ -2,33 +2,44 @@
 Contributors: wpbooster
 Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, ecommerce
 Requires at least: 6.0
-Tested up to: 6.8.3
+Tested up to: 6.9
 Requires PHP: 8.0
 Stable tag: 2.1.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Complete Meta tracking solution with Pixel (browser-side) and Conversions API (server-side) for accurate event tracking. Supports page views, Elementor Pro forms, and WooCommerce with automatic event deduplication.
+Complete Meta tracking with Pixel + Conversions API. Dual-channel tracking with auto deduplication. WooCommerce support. NEW: Homepage performance optimization for perfect GTmetrix scores.
 
 == Description ==
 
 Meta Pixel & Conversions API for WordPress provides a complete tracking solution combining browser-side Pixel tracking with server-side Conversions API for maximum accuracy and reliability. This dual-tracking approach ensures events are captured even when browser cookies are blocked, improving campaign measurement and attribution.
 
-= Features =
+Perfect for performance-focused businesses: NEW homepage performance optimization feature lets you disable pixel on your homepage for blazing-fast GTmetrix scores while maintaining 100% data capture via server-side tracking.
 
-* **Dual Tracking** - Meta Pixel (browser-side) + Conversions API (server-side) for maximum accuracy
-* **WooCommerce Integration** - Full event tracking for ViewContent, AddToCart, InitiateCheckout, and Purchase
-* **Purchase Event Timing** - Choose when Purchase events fire: "When order is placed" or "When payment is confirmed"
-* **Page View Tracking** - Automatically sends PageView events via both Pixel and CAPI
-* **Elementor Pro Integration** - Tracks form submissions as Lead events with automatic deduplication
-* **Event Deduplication** - Automatically prevents duplicate events between Pixel and CAPI
-* **Tracking Exceptions** - Exclude specific pages or forms from tracking
-* **Privacy-Compliant** - Properly hashes PII data according to Facebook requirements
-* **Auto-Config Control** - Disable Facebook's automatic event tracking for cleaner data
-* **Debug Logging** - Built-in log viewer with automatic cleanup (10MB cap, 30-day retention)
-* **Test Mode** - Support for Facebook Test Event Code
-* **System Status** - Dashboard showing configuration and compatibility
-* **Automatic Updates** - Weekly checks for updates from GitHub releases
+= Core Features =
+
+* Dual Tracking - Meta Pixel (browser-side) + Conversions API (server-side) for maximum accuracy
+* Homepage Performance Mode - Disable pixel on homepage for perfect speed testing scores (NEW in v2.1.2)
+* WooCommerce Integration - Full event tracking for ViewContent, AddToCart, InitiateCheckout, and Purchase
+* Purchase Event Timing - Choose when Purchase events fire: "When order is placed" or "When payment is confirmed"
+* Page View Tracking - Automatically sends PageView events via both Pixel and CAPI
+* Elementor Pro Integration - Tracks form submissions as Lead events with automatic deduplication
+* Event Deduplication - Automatically prevents duplicate events between Pixel and CAPI
+* Tracking Exceptions - Exclude specific pages or forms from tracking
+* Privacy-Compliant - Properly hashes PII data according to Facebook requirements
+* Auto-Config Control - Disable Facebook's automatic event tracking for cleaner data
+* Debug Logging - Built-in log viewer with automatic cleanup (10MB cap, 30-day retention)
+* Test Mode - Support for Facebook Test Event Code
+* System Status - Dashboard showing configuration and compatibility
+* Automatic Updates - Weekly checks for updates from GitHub releases
+
+= Performance Optimization =
+
+NEW in v2.1.2: Homepage pixel exclusion setting for performance-focused businesses.
+
+When enabled, your homepage loads without the browser-side Meta Pixel JavaScript (saves ~900ms on Fully Loaded time), while server-side CAPI continues tracking all PageView data. Perfect for web hosts, developers, performance consultants, or anyone where GTmetrix/PageSpeed scores matter.
+
+Conversion pages (forms, checkout, product pages) continue using full dual-channel tracking for maximum accuracy.
 
 = Requirements =
 
@@ -80,11 +91,15 @@ The plugin automatically injects the Meta Pixel code for browser-side tracking. 
 
 = Will this slow down my site? =
 
-No. Events are sent server-side after the page loads, and browser-side events are non-blocking, so there's no impact on page load times.
+Server-side CAPI events have zero impact on page load. Browser-side Meta Pixel adds approximately 88KB (~900ms on Fully Loaded time). For performance-critical pages like your homepage, use the "Disable Pixel on Homepage" setting to remove browser-side scripts while maintaining 100% tracking via server-side CAPI. Perfect for sites where GTmetrix or PageSpeed scores matter.
 
 = How do automatic updates work? =
 
 The plugin checks for updates from GitHub releases weekly. When a new version is available, you'll see an update notification in your WordPress admin dashboard. Click "Update" to install automatically.
+
+= How do I optimize homepage performance for GTmetrix testing? =
+
+Enable the "Disable Pixel on Homepage" setting in Settings → Meta CAPI. This removes browser-side pixel JavaScript from your homepage (saves approximately 900ms on Fully Loaded time) while server-side CAPI continues tracking all PageView data. Conversion pages keep full dual-channel tracking. Perfect for performance service providers where testing scores impact credibility.
 
 == Screenshots ==
 
@@ -98,26 +113,26 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 == Changelog ==
 
 = 2.1.2 =
-* NEW FEATURE: Added "Disable Pixel on Homepage" setting
-* Reverted delayed pixel loading (v2.1.0-2.1.1) due to GTmetrix measurement issues
-* Homepage pixel can now be disabled while CAPI continues tracking
-* Perfect for performance-focused sites where homepage speed testing is critical
-* Setting: Meta CAPI → Settings → "Disable browser-side pixel on homepage"
+* NEW FEATURE: Added homepage-specific pixel exclusion setting
+* New checkbox: "Disable browser-side pixel on homepage (CAPI still tracks)"
+* Improves homepage GTmetrix scores by ~900ms while maintaining 100% data capture
+* Reverted delayed loading approach from v2.1.0-2.1.1 (caused measurement issues)
+* Added comprehensive documentation in Setup Guide tab
+* Perfect for performance-focused businesses selling speed/hosting services
+* Location: Settings → Meta CAPI → Settings tab
 
 = 2.1.1 =
-* PERFORMANCE: Removed immediate post-load trigger for better GTmetrix scores
-* Pixel now loads ONLY on user interaction or 3-second timeout
-* Fully Loaded time no longer includes pixel loading (dramatic improvement for testing tools)
-* Real users still get pixel loaded within 1-2 seconds via interaction
-* Perfect for sites where performance testing is critical
+* Removed immediate post-load trigger for better performance testing scores
+* Pixel loads only on user interaction or 3-second timeout
+* Improved Fully Loaded time measurement for GTmetrix and PageSpeed tools
+* Real users unaffected - pixel loads within 1-2 seconds via interaction
 
 = 2.1.0 =
-* PERFORMANCE: Implemented delayed pixel loading (interaction-based + 3s fallback)
-* Improves Fully Loaded time by ~900ms (47% faster) while maintaining 100% data capture
-* Added preconnect hints for Facebook domains (saves ~300ms on connection)
-* Pixel loads on first user interaction (mousemove, scroll, click) or after 3 seconds
-* Server-side CAPI continues to fire immediately (zero data loss)
-* Deduplication still works perfectly (same event IDs)
+* Implemented delayed pixel loading with interaction-based triggers
+* Added 3-second fallback timeout for pixel loading
+* Added preconnect hints for Facebook domains (saves ~300ms)
+* Improved page load performance while maintaining tracking accuracy
+* Server-side CAPI continues immediate firing (zero data loss)
 
 = 2.0.4 =
 * Made get_user_data() method public for external plugin access
@@ -202,15 +217,15 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 
 = 2.1.2 =
 
-NEW FEATURE - Add homepage-specific pixel exclusion for perfect GTmetrix scores. Disable browser-side pixel on homepage while maintaining 100% server-side tracking via CAPI. Ideal for performance service providers where homepage testing matters. Enable in Settings → "Disable Pixel on Homepage".
+NEW FEATURE: Homepage pixel exclusion for perfect performance testing scores. Disable browser-side pixel on homepage only while server-side CAPI continues tracking all data. Improves GTmetrix Fully Loaded time by approximately 900ms. Ideal for performance-focused businesses. Enable in Settings tab.
 
 = 2.1.1 =
 
-PERFORMANCE REFINEMENT - Removes immediate post-load trigger for even better GTmetrix/PageSpeed scores. Pixel loads only on user interaction or 3s timeout. Perfect for performance-focused sites where testing scores matter. Real users unaffected (pixel loads within 1-2s via interaction).
+Performance refinement for testing tools. Pixel loads only on user interaction or 3-second timeout. Improves GTmetrix and PageSpeed scores while maintaining complete tracking for real users.
 
 = 2.1.0 =
 
-MAJOR PERFORMANCE IMPROVEMENT - Delayed pixel loading cuts Fully Loaded time by ~900ms (47% faster) while maintaining 100% data capture via server-side CAPI. Zero data loss, perfect deduplication. Highly recommended for all users, especially those selling performance services.
+Major performance improvement with delayed pixel loading. Reduces Fully Loaded time by approximately 900ms while maintaining 100% data capture via server-side CAPI. Recommended for performance-focused sites.
 
 = 2.0.4 =
 
