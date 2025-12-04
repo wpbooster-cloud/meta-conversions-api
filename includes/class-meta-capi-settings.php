@@ -2056,6 +2056,7 @@ class Meta_CAPI_Settings {
                 <ul style="column-count: 2; column-gap: 30px; list-style: disc; margin-left: 20px;">
                     <li><a href="#quick-start"><?php esc_html_e('Quick Start Guide', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#what-tracked"><?php esc_html_e('What Gets Tracked', 'meta-conversions-api'); ?></a></li>
+                    <li><a href="#performance-optimization"><?php esc_html_e('Performance Optimization', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#woocommerce-setup"><?php esc_html_e('WooCommerce Setup', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#privacy"><?php esc_html_e('Privacy & Data Handling', 'meta-conversions-api'); ?></a></li>
                     <li><a href="#anonymous-analytics"><?php esc_html_e('Anonymous Usage Analytics', 'meta-conversions-api'); ?></a></li>
@@ -2192,6 +2193,67 @@ class Meta_CAPI_Settings {
                     </a>
                     <?php esc_html_e('if needed, but it\'s not recommended for most sites.', 'meta-conversions-api'); ?>
                 </p>
+            </div>
+
+            <div class="card" id="performance-optimization" style="max-width: 100%; margin-top: 20px;">
+                <h2><?php esc_html_e('⚡ Performance Optimization', 'meta-conversions-api'); ?></h2>
+                
+                <h3><?php esc_html_e('Disable Pixel on Homepage (NEW in v2.1.2)', 'meta-conversions-api'); ?></h3>
+                <p><?php esc_html_e('Perfect for performance-focused businesses where homepage speed testing matters (like web hosts, developers, or performance consultants).', 'meta-conversions-api'); ?></p>
+                
+                <div style="background: #f0f6fc; padding: 15px; border-left: 4px solid #2271b1; margin-top: 15px;">
+                    <strong><?php esc_html_e('🎯 Use Case:', 'meta-conversions-api'); ?></strong>
+                    <p style="margin: 10px 0 0 0;">
+                        <?php esc_html_e('When clients test your homepage with GTmetrix or PageSpeed Insights, the Meta Pixel JavaScript can add ~900ms to your Fully Loaded time. This setting removes the browser-side pixel from your homepage only, while keeping server-side CAPI tracking active.', 'meta-conversions-api'); ?>
+                    </p>
+                </div>
+                
+                <h4 style="margin-top: 20px; font-size: 14px;"><?php esc_html_e('How It Works:', 'meta-conversions-api'); ?></h4>
+                <p><strong><?php esc_html_e('Homepage (When Setting Enabled):', 'meta-conversions-api'); ?></strong></p>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('No browser-side Meta Pixel loaded (fbevents.js skipped)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Server-side CAPI still tracks PageView with full data', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Fully Loaded time improves by ~900ms (47% faster)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Perfect GTmetrix/PageSpeed scores for client demonstrations', 'meta-conversions-api'); ?></li>
+                </ul>
+                
+                <p style="margin-top: 15px;"><strong><?php esc_html_e('All Other Pages (Pixel Remains Active):', 'meta-conversions-api'); ?></strong></p>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('Full dual-channel tracking (CAPI + Pixel)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Perfect event deduplication', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Maximum event match quality', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Complete conversion funnel tracking', 'meta-conversions-api'); ?></li>
+                </ul>
+                
+                <h4 style="margin-top: 20px; font-size: 14px;"><?php esc_html_e('When to Use This:', 'meta-conversions-api'); ?></h4>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li><?php esc_html_e('You sell performance, hosting, or speed optimization services', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Prospects frequently test your homepage with GTmetrix or PageSpeed', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Homepage speed scores impact your credibility or conversions', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('You want to demonstrate expertise through blazing fast homepage', 'meta-conversions-api'); ?></li>
+                </ul>
+                
+                <h4 style="margin-top: 20px; font-size: 14px;"><?php esc_html_e('How to Enable:', 'meta-conversions-api'); ?></h4>
+                <ol style="line-height: 1.8;">
+                    <li>
+                        <?php esc_html_e('Go to', 'meta-conversions-api'); ?>
+                        <a href="<?php echo esc_url(admin_url('options-general.php?page=meta-conversions-api')); ?>">
+                            <?php esc_html_e('Settings → Meta Pixel & CAPI', 'meta-conversions-api'); ?>
+                        </a>
+                    </li>
+                    <li><?php esc_html_e('Find the "Disable browser-side pixel on homepage" checkbox', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Check the box to disable pixel on homepage only', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Save Settings', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Clear your cache (Breeze, browser, Cloudflare if applicable)', 'meta-conversions-api'); ?></li>
+                    <li><?php esc_html_e('Test your homepage with GTmetrix - should see ~900ms improvement', 'meta-conversions-api'); ?></li>
+                </ol>
+                
+                <div style="background: #d4edda; padding: 15px; border-left: 4px solid #28a745; margin-top: 15px;">
+                    <strong><?php esc_html_e('✅ Zero Data Loss:', 'meta-conversions-api'); ?></strong>
+                    <p style="margin: 10px 0 0 0;">
+                        <?php esc_html_e('Your homepage still sends complete PageView data to Facebook via server-side CAPI. The only difference is the browser-side JavaScript is removed for better performance scores. All conversion tracking (forms, audits, WooCommerce) on other pages continues to work perfectly with full deduplication.', 'meta-conversions-api'); ?>
+                    </p>
+                </div>
             </div>
 
             <div class="card" id="woocommerce-setup" style="max-width: 100%; margin-top: 20px;">
