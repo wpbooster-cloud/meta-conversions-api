@@ -4,7 +4,7 @@ Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, 
 Requires at least: 6.0
 Tested up to: 6.8.3
 Requires PHP: 8.0
-Stable tag: 2.0.3
+Stable tag: 2.0.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -97,6 +97,11 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 
 == Changelog ==
 
+= 2.0.4 =
+* Made get_user_data() method public for external plugin access
+* Enables third-party plugins to use consistent user data collection
+* Allows Performance Audit plugin and other plugins to track custom events with proper user data
+
 = 2.0.3 =
 * Fixed changelog formatting for better readability
 * Updated tested WordPress version to 6.8.3
@@ -172,6 +177,10 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 * Test event functionality
 
 == Upgrade Notice ==
+
+= 2.0.4 =
+
+API enhancement - Makes get_user_data() method public to enable external plugins to track custom events with consistent user data. Required for Performance Audit plugin InitiateAudit tracking.
 
 = 2.0.3 =
 
