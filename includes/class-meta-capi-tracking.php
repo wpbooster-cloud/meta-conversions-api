@@ -574,7 +574,7 @@ class Meta_CAPI_Tracking {
      *
      * @return array User data.
      */
-    private function get_user_data(): array {
+    public function get_user_data(): array {
         $user_data = [];
 
         // CRITICAL: Capture IP and user agent from the original request.
