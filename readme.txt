@@ -4,7 +4,7 @@ Tags: facebook, conversions api, meta, pixel, elementor, woocommerce, tracking, 
 Requires at least: 6.0
 Tested up to: 6.8.3
 Requires PHP: 8.0
-Stable tag: 2.1.1
+Stable tag: 2.1.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,13 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 6. Documentation tab with setup guide
 
 == Changelog ==
+
+= 2.1.2 =
+* NEW FEATURE: Added "Disable Pixel on Homepage" setting
+* Reverted delayed pixel loading (v2.1.0-2.1.1) due to GTmetrix measurement issues
+* Homepage pixel can now be disabled while CAPI continues tracking
+* Perfect for performance-focused sites where homepage speed testing is critical
+* Setting: Meta CAPI → Settings → "Disable browser-side pixel on homepage"
 
 = 2.1.1 =
 * PERFORMANCE: Removed immediate post-load trigger for better GTmetrix scores
@@ -192,6 +199,10 @@ The plugin checks for updates from GitHub releases weekly. When a new version is
 * Test event functionality
 
 == Upgrade Notice ==
+
+= 2.1.2 =
+
+NEW FEATURE - Add homepage-specific pixel exclusion for perfect GTmetrix scores. Disable browser-side pixel on homepage while maintaining 100% server-side tracking via CAPI. Ideal for performance service providers where homepage testing matters. Enable in Settings → "Disable Pixel on Homepage".
 
 = 2.1.1 =
 

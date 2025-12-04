@@ -214,6 +214,16 @@ class Meta_CAPI_Pixel {
         }
         self::$pixel_injected_global = true;
 
+        // Check if pixel should be disabled on homepage.
+        $disable_pixel_on_homepage = (bool) get_option('meta_capi_disable_pixel_homepage', false);
+        if ($disable_pixel_on_homepage && is_front_page()) {
+            $this->logger->info('Pixel injection skipped - homepage pixel disabled for performance', [
+                'is_front_page' => true,
+                'note' => 'CAPI will still track server-side',
+            ]);
+            return; // Don't inject pixel on homepage (CAPI still tracks).
+        }
+
         // Check if current page is excluded from tracking.
         $excluded_pages_str = get_option('meta_capi_exclude_pages', '');
         $current_page_id = get_queried_object_id();
@@ -229,62 +239,24 @@ class Meta_CAPI_Pixel {
             }
         }
 
-        $this->logger->info('Injecting Meta Pixel code (delayed loading)', ['pixel_id' => $this->pixel_id]);
+        $this->logger->info('Injecting Meta Pixel code', ['pixel_id' => $this->pixel_id]);
         
         ?>
-        <!-- Meta Pixel Code (Meta Conversions API Plugin - Delayed Loading) -->
+        <!-- Meta Pixel Code (Meta Conversions API Plugin) -->
         <script type="text/javascript">
         // Log pixel initialization for debugging
         if (typeof console !== 'undefined' && console.log) {
-            console.log('[Meta CAPI] Pixel code executing - initializing fbq stub with delayed loading');
+            console.log('[Meta CAPI] Pixel code executing - initializing fbq function');
         }
         
-        // Step 1: Create fbq stub function immediately (captures all events in queue)
         !function(f,b,e,v,n,t,s)
         {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
         n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!1;n.version='2.0';
-        n.queue=[];n.agent='plmeta_capi_delayed'}(window,document,'script','about:blank');
-        
-        // Step 2: Delayed loading function (loads fbevents.js)
-        (function() {
-            var pixelLoaded = false;
-            var pixelUrl = 'https://connect.facebook.net/en_US/fbevents.js';
-            
-            function loadMetaPixel() {
-                if (pixelLoaded) return;
-                pixelLoaded = true;
-                
-                if (typeof console !== 'undefined' && console.log) {
-                    console.log('[Meta CAPI] Loading Meta Pixel (delayed)', {
-                        trigger: 'user_interaction_or_timeout'
-                    });
-                }
-                
-                // Load the actual fbevents.js
-                var script = document.createElement('script');
-                script.async = true;
-                script.src = pixelUrl;
-                var firstScript = document.getElementsByTagName('script')[0];
-                firstScript.parentNode.insertBefore(script, firstScript);
-                
-                // Mark fbq as loaded (will process queue when script arrives)
-                window.fbq.loaded = true;
-            }
-            
-            // Trigger 1: Load on first user interaction (real users)
-            var interactionEvents = ['mousemove', 'scroll', 'touchstart', 'click', 'keydown'];
-            interactionEvents.forEach(function(eventType) {
-                document.addEventListener(eventType, loadMetaPixel, { 
-                    once: true, 
-                    passive: true,
-                    capture: true 
-                });
-            });
-            
-            // Trigger 2: Fallback after 3 seconds (ensures loading, but after GTmetrix "Fully Loaded")
-            setTimeout(loadMetaPixel, 3000);
-        })();
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window, document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
         
         // Log after fbq function is created
         if (typeof console !== 'undefined' && console.log) {

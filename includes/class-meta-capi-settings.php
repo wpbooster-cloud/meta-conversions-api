@@ -135,6 +135,12 @@ class Meta_CAPI_Settings {
             'default' => true,
         ]);
 
+        register_setting('meta_capi_settings', 'meta_capi_disable_pixel_homepage', [
+            'type' => 'boolean',
+            'sanitize_callback' => 'rest_sanitize_boolean',
+            'default' => false,
+        ]);
+
         register_setting('meta_capi_settings', 'meta_capi_enable_page_view', [
             'type' => 'boolean',
             'sanitize_callback' => 'rest_sanitize_boolean',
@@ -303,6 +309,14 @@ class Meta_CAPI_Settings {
             'meta_capi_enable_pixel',
             __('Enable Meta Pixel Injection', 'meta-conversions-api'),
             [$this, 'render_pixel_injection_field'],
+            'meta-conversions-api',
+            'meta_capi_tracking'
+        );
+
+        add_settings_field(
+            'meta_capi_disable_pixel_homepage',
+            __('Disable Pixel on Homepage', 'meta-conversions-api'),
+            [$this, 'render_disable_pixel_homepage_field'],
             'meta-conversions-api',
             'meta_capi_tracking'
         );
@@ -859,6 +873,28 @@ class Meta_CAPI_Settings {
         </label>
         <p class="description">
             <?php esc_html_e('Adds the Meta Pixel (fbq) JavaScript to your site for browser-side tracking. Disable this if you already have the pixel installed via another method.', 'meta-conversions-api'); ?>
+        </p>
+        <?php
+    }
+
+    /**
+     * Render disable pixel on homepage field.
+     */
+    public function render_disable_pixel_homepage_field(): void {
+        $value = get_option('meta_capi_disable_pixel_homepage', false);
+        ?>
+        <label>
+            <input
+                type="checkbox"
+                name="meta_capi_disable_pixel_homepage"
+                id="meta_capi_disable_pixel_homepage"
+                value="1"
+                <?php checked($value, true); ?>
+            >
+            <?php esc_html_e('Disable browser-side pixel on homepage (CAPI still tracks)', 'meta-conversions-api'); ?>
+        </label>
+        <p class="description">
+            <?php esc_html_e('Improves homepage performance for GTmetrix/PageSpeed testing by removing browser-side pixel. Server-side CAPI continues to track all events. Perfect for performance-focused businesses.', 'meta-conversions-api'); ?>
         </p>
         <?php
     }
