@@ -104,11 +104,11 @@ Enable the "Disable Pixel on Homepage" setting in Settings → Meta CAPI. This r
 == Screenshots ==
 
 1. Settings page with Facebook credentials and tracking options
-2. WooCommerce event tracking configuration
-3. Page and form exclusion settings
-4. System status dashboard
-5. Built-in log viewer
-6. Documentation tab with setup guide
+2. Tracking settings including new "Disable Pixel on Homepage" performance optimization
+3. WooCommerce event tracking configuration with individual event controls
+4. Error notifications configuration with email alerts
+5. Tracking exceptions - page and form exclusion settings
+6. Setup Guide tab with performance optimization documentation
 
 == Changelog ==
 
