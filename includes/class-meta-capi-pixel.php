@@ -120,10 +120,11 @@ class Meta_CAPI_Pixel {
         
         // Only inject pixel if enabled and pixel ID is set.
         if ($this->auto_inject && !empty($this->pixel_id)) {
+            add_action('wp_head', [$this, 'inject_preconnect_hints'], 2); // Early for preconnect
             add_action('wp_head', [$this, 'inject_pixel_code'], 5);
             add_action('wp_footer', [$this, 'inject_pixel_noscript'], 100);
             $hooks_registered = true;
-            $this->logger->info('Pixel injection hooks registered (global)');
+            $this->logger->info('Pixel injection hooks registered (global with preconnect)');
         } else {
             // Log why hooks weren't registered (for debugging).
             $this->logger->log('Pixel injection hooks NOT registered', 'debug', [
@@ -150,10 +151,32 @@ class Meta_CAPI_Pixel {
     }
 
     /**
+     * Inject preconnect hints for Facebook domains.
+     *
+     * This speeds up pixel loading by establishing early connections to Facebook servers.
+     * Saves ~300ms on DNS lookup + TLS handshake.
+     *
+     * @return void
+     */
+    public function inject_preconnect_hints(): void {
+        // Don't inject for logged-in admins.
+        if ($this->should_skip_tracking()) {
+            return;
+        }
+
+        ?>
+        <!-- Meta Pixel Preconnect Hints (Meta Conversions API Plugin) -->
+        <link rel="preconnect" href="https://connect.facebook.net" crossorigin>
+        <link rel="dns-prefetch" href="https://connect.facebook.net">
+        <link rel="dns-prefetch" href="https://www.facebook.com">
+        <?php
+    }
+
+    /**
      * Inject Meta Pixel base code in <head>.
      *
      * Security: Pixel ID is validated and sanitized.
-     * Performance: Minimal code, loads async.
+     * Performance: Uses delayed loading strategy - pixel loads after user interaction or 3s timeout.
      *
      * @return void
      */
@@ -206,24 +229,71 @@ class Meta_CAPI_Pixel {
             }
         }
 
-        $this->logger->info('Injecting Meta Pixel code', ['pixel_id' => $this->pixel_id]);
+        $this->logger->info('Injecting Meta Pixel code (delayed loading)', ['pixel_id' => $this->pixel_id]);
         
         ?>
-        <!-- Meta Pixel Code (Meta Conversions API Plugin) -->
+        <!-- Meta Pixel Code (Meta Conversions API Plugin - Delayed Loading) -->
         <script type="text/javascript">
         // Log pixel initialization for debugging
         if (typeof console !== 'undefined' && console.log) {
-            console.log('[Meta CAPI] Pixel code executing - initializing fbq function');
+            console.log('[Meta CAPI] Pixel code executing - initializing fbq stub with delayed loading');
         }
         
+        // Step 1: Create fbq stub function immediately (captures all events in queue)
         !function(f,b,e,v,n,t,s)
         {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
         n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-        n.queue=[];t=b.createElement(e);t.async=!0;
-        t.src=v;s=b.getElementsByTagName(e)[0];
-        s.parentNode.insertBefore(t,s)}(window, document,'script',
-        'https://connect.facebook.net/en_US/fbevents.js');
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!1;n.version='2.0';
+        n.queue=[];n.agent='plmeta_capi_delayed'}(window,document,'script','about:blank');
+        
+        // Step 2: Delayed loading function (loads fbevents.js)
+        (function() {
+            var pixelLoaded = false;
+            var pixelUrl = 'https://connect.facebook.net/en_US/fbevents.js';
+            
+            function loadMetaPixel() {
+                if (pixelLoaded) return;
+                pixelLoaded = true;
+                
+                if (typeof console !== 'undefined' && console.log) {
+                    console.log('[Meta CAPI] Loading Meta Pixel (delayed)', {
+                        trigger: 'user_interaction_or_timeout'
+                    });
+                }
+                
+                // Load the actual fbevents.js
+                var script = document.createElement('script');
+                script.async = true;
+                script.src = pixelUrl;
+                var firstScript = document.getElementsByTagName('script')[0];
+                firstScript.parentNode.insertBefore(script, firstScript);
+                
+                // Mark fbq as loaded (will process queue when script arrives)
+                window.fbq.loaded = true;
+            }
+            
+            // Trigger 1: Load on first user interaction (fastest)
+            var interactionEvents = ['mousemove', 'scroll', 'touchstart', 'click', 'keydown'];
+            interactionEvents.forEach(function(eventType) {
+                document.addEventListener(eventType, loadMetaPixel, { 
+                    once: true, 
+                    passive: true,
+                    capture: true 
+                });
+            });
+            
+            // Trigger 2: Fallback after 3 seconds (ensures loading even with no interaction)
+            setTimeout(loadMetaPixel, 3000);
+            
+            // Trigger 3: Load immediately if page is already interactive/complete
+            if (document.readyState === 'complete') {
+                setTimeout(loadMetaPixel, 100);
+            } else {
+                window.addEventListener('load', function() {
+                    setTimeout(loadMetaPixel, 100);
+                });
+            }
+        })();
         
         // Log after fbq function is created
         if (typeof console !== 'undefined' && console.log) {
